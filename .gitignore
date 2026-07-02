@@ -1,0 +1,11 @@
+# Credentials and environment variables
+.env
+Cred.env
+*.env
+
+# Python caching
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.ipynb_checkpoints/
