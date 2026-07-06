@@ -64,7 +64,7 @@ Ensure your local environment is running Python 3.9+ and contains an active Gemi
 ## 📸 App Screenshots
 
 ### Dark Mode Interface
-![Dark Mode Dashboard](screenshots/A1.png)
+![Dark Mode Dashboard](Screenshots/A1.png)
 
 ### Light Mode Interface
-![Light Mode Dashboard](screenshots/A2.png)
+![Light Mode Dashboard](Screenshots/A2.png)
