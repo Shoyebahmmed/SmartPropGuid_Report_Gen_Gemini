@@ -1,11 +1,16 @@
+# from app import get_pdf_bytes_playwright
 import os
 import io
 import datetime
 import pandas as pd
 import streamlit as st
 import google.generativeai as genai
+import asyncio
+import base64
+from playwright.async_api import async_playwright
 from dotenv import load_dotenv
 from xhtml2pdf import pisa
+
 
 # ==============================================================================
 # 1. SETUP & CONFIGURATION
@@ -16,6 +21,12 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+
+# abs_path = os.path.dirname(os.path.abspath(__file__))
+# logo_path = os.path.join(abs_path, "LOGO.svg")
+# html_code = html_code.replace('src="LOGO.svg"', f'src="{logo_path}"')
+
 
 # Load environment variables from Cred.env or .env relative to script directory
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -41,6 +52,12 @@ if "theme" not in st.session_state:
 if "generated_report_html" not in st.session_state:
     st.session_state.generated_report_html = None
 
+if "df_data" not in st.session_state:
+    st.session_state.df_data = None
+
+if "template_content" not in st.session_state:
+    st.session_state.template_content = ""
+
 # Form field defaults
 FORM_DEFAULTS = {
     "full_name": "",
@@ -63,7 +80,59 @@ for i in range(11):
 def toggle_theme():
     st.session_state.theme = "light" if st.session_state.theme == "dark" else "dark"
 
+# Helper to start a compact loading box
+def start_loader(message: str):
+    placeholder = st.empty()
+    placeholder.markdown(
+        f'''<div class="loader-container">
+                <div class="loader"></div>
+                <p class="loader-text">{message}</p>
+            </div>''',
+        unsafe_allow_html=True,
+    )
+    return placeholder
+
+# Helper to stop the loading box
+def stop_loader(placeholder):
+    if placeholder:
+        placeholder.empty()
+
 IS_DARK = st.session_state.theme == "dark"
+
+# Helper to filter property listing datasets by postcode and budget
+def filter_property_data(df, postcode_str, budget_str, property_type_str):
+    if df is None or len(df) == 0:
+        return df
+    df_filtered = df.copy()
+    if postcode_str:
+        try:
+            pc_val = float(postcode_str)
+            if 'Property post code' in df_filtered.columns:
+                df_filtered = df_filtered[df_filtered['Property post code'] == pc_val]
+        except ValueError:
+            pass
+    if budget_str and 'Purchase price' in df_filtered.columns:
+        if "Under $500k" in budget_str:
+            df_filtered = df_filtered[df_filtered['Purchase price'] < 500000]
+        elif "$500k" in budget_str and "$800k" in budget_str:
+            df_filtered = df_filtered[(df_filtered['Purchase price'] >= 500000) & (df_filtered['Purchase price'] <= 800000)]
+        elif "$800k" in budget_str and "$1.2M" in budget_str:
+            df_filtered = df_filtered[(df_filtered['Purchase price'] >= 800000) & (df_filtered['Purchase price'] <= 1200000)]
+        elif "Above $1.2M" in budget_str:
+            df_filtered = df_filtered[df_filtered['Purchase price'] > 1200000]
+    if property_type_str and 'Primary purpose' in df_filtered.columns:
+        if property_type_str == "Land":
+            df_filtered = df_filtered[df_filtered['Primary purpose'] == 'Vacant land']
+        elif property_type_str in ["House", "Unit", "Townhouse"]:
+            df_filtered = df_filtered[df_filtered['Primary purpose'] == 'Residence']
+    if len(df_filtered) > 50:
+        if 'Contract date' in df_filtered.columns:
+            try:
+                df_filtered = df_filtered.sort_values(by='Contract date', ascending=False)
+            except Exception:
+                pass
+        df_filtered = df_filtered.head(50)
+    return df_filtered
 
 # ==============================================================================
 # 2. DESIGN SYSTEM & CSS INJECTION
@@ -101,6 +170,38 @@ css = f"""
     .block-container {{
         padding: 2rem 2.5rem 3rem !important;
         max-width: 1300px !important;
+    }}
+
+    /* Loader container – small centered box */
+    .loader-container {{
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        background: rgba(0,0,0,0.5);
+        border-radius: 12px;
+        width: 260px;
+        margin: auto;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }}
+    .loader {{
+        border: 4px solid {BG_SUBTLE};
+        border-top: 4px solid {ACCENT_COLOR};
+        border-radius: 50%;
+        width: 60px;
+        height: 60px;
+        animation: spin 1s linear infinite;
+    }}
+    @keyframes spin {{
+        0% {{ transform: rotate(0deg); }}
+        100% {{ transform: rotate(360deg); }}
+    }}
+    .loader-text {{
+        margin-top: 1rem;
+        color: {TEXT_COLOR};
+        font-size: 1.1rem;
+        text-align: center;
     }}
 
     /* Tabs (pill-style navigation) */
@@ -436,28 +537,107 @@ with tab_preferences:
             st.rerun()
     with btn_col2:
         if st.button("✅ Submit", use_container_width=True, key="submit_btn"):
-            EXCEL_PATH = r"C:\Users\ahmma\.gemini\antigravity-ide\scratch\SmartPropGuid_Report_Gen_Gemini\SPG_Customer_Intake_Form.xlsx"
-            new_row = {
-                "Timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "Full Name": st.session_state.full_name,
-                "Phone": st.session_state.phone,
-                "Email": st.session_state.email,
-                "Property Type": st.session_state.property_type,
-                "Suburb": st.session_state.suburb,
-                "Budget": st.session_state.budget,
-                "Intention": st.session_state.intention,
-                "Priorities": ", ".join(selected_priorities),
-            }
-            try:
-                if os.path.exists(EXCEL_PATH):
-                    df_existing = pd.read_excel(EXCEL_PATH)
-                    df_updated = pd.concat([df_existing, pd.DataFrame([new_row])], ignore_index=True)
-                else:
-                    df_updated = pd.DataFrame([new_row])
-                df_updated.to_excel(EXCEL_PATH, index=False)
-                st.success("✅ Submission saved to Excel successfully!")
-            except Exception as e:
-                st.error(f"❌ Failed to save: {e}")
+            full_name = st.session_state.get("full_name", "").strip()
+            phone = st.session_state.get("phone", "").strip()
+            email = st.session_state.get("email", "").strip()
+            suburb_input = st.session_state.get("suburb", "").strip()
+            
+            if not full_name or not phone or not email or not suburb_input:
+                st.error("❌ Full Name, Phone Number, Email Address, and Suburb/Area are required fields.")
+            else:
+                EXCEL_PATH = r"C:\Users\ahmma\.gemini\antigravity-ide\scratch\SmartPropGuid_Report_Gen_Gemini\SPG_Customer_Intake_Form.xlsx"
+                try:
+                    import openpyxl
+                    import re
+                    from copy import copy
+                    
+                    if not os.path.exists(EXCEL_PATH):
+                        st.error(f"❌ Excel file not found: {EXCEL_PATH}. Please make sure the template file exists.")
+                    else:
+                        wb = openpyxl.load_workbook(EXCEL_PATH)
+                        sheet = wb.active
+                        
+                        # Find the last row with data in Column A (Submission ID)
+                        last_row = 3
+                        for r in range(4, sheet.max_row + 2):
+                            if sheet.cell(row=r, column=1).value is not None:
+                                last_row = r
+                        
+                        # Generate Submission ID
+                        last_id = sheet.cell(row=last_row, column=1).value
+                        if last_id and isinstance(last_id, str) and last_id.startswith("SPG-"):
+                            try:
+                                num = int(last_id.split("-")[1])
+                                next_id = f"SPG-{num + 1:03d}"
+                            except (IndexError, ValueError):
+                                next_id = "SPG-002"
+                        else:
+                            next_id = "SPG-001"
+                        
+                        # Suburb, Postcode, and State parsing
+                        suburb_clean, postcode_clean, state_clean = "", "", ""
+                        if suburb_input:
+                            postcode_match = re.search(r"\b\d{3,4}\b", suburb_input)
+                            postcode_clean = postcode_match.group(0) if postcode_match else ""
+                            
+                            state_match = re.search(r"\b(VIC|NSW|QLD|WA|SA|TAS|ACT|NT)\b", suburb_input, re.IGNORECASE)
+                            state_clean = state_match.group(0).upper() if state_match else ""
+                            
+                            suburb_clean = suburb_input
+                            if postcode_clean:
+                                suburb_clean = suburb_clean.replace(postcode_clean, "")
+                            if state_clean:
+                                suburb_clean = re.sub(rf"\b{state_clean}\b", "", suburb_clean, flags=re.IGNORECASE)
+                                
+                            suburb_clean = re.sub(r"[,\-\s]+", " ", suburb_clean).strip()
+                        
+                        # Map priority checkboxes to Yes/No
+                        priorities_yes_no = []
+                        for i in range(11):
+                            val = "Yes" if st.session_state.get(f"priority_{i}") else "No"
+                            priorities_yes_no.append(val)
+                        
+                        next_row = last_row + 1
+                        
+                        # Date format
+                        date_submitted = datetime.date.today().strftime("%d/%m/%Y")
+                        
+                        # Assemble row data (now 25 columns)
+                        row_values = [
+                            next_id,                           # 1: Submission ID
+                            date_submitted,                    # 2: Date Submitted
+                            full_name,                         # 3: Full Name
+                            email,                             # 4: Email Address
+                            phone,                             # 5: Phone Number
+                            st.session_state.get("property_type", "House"),  # 6: Property Type
+                            suburb_clean,                      # 7: Suburb / Area
+                            postcode_clean,                    # 8: Postcode
+                            state_clean,                       # 9: State
+                            st.session_state.get("budget", ""), # 10: Budget Range
+                            st.session_state.get("intention", ""), # 11: Buying Purpose
+                        ]
+                        # Append 11 priorities
+                        row_values.extend(priorities_yes_no)
+                        # Append remaining columns: Additional Notes (23), Report Status (24), Assigned To (25)
+                        row_values.extend(["", "Pending", "Shoyeb"])
+                        
+                        # Write to the cells and copy style if last_row has styles
+                        for col_idx, val in enumerate(row_values, start=1):
+                            new_cell = sheet.cell(row=next_row, column=col_idx, value=val)
+                            if last_row >= 4:
+                                src_cell = sheet.cell(row=last_row, column=col_idx)
+                                if src_cell.has_style:
+                                    new_cell.font = copy(src_cell.font)
+                                    new_cell.border = copy(src_cell.border)
+                                    new_cell.fill = copy(src_cell.fill)
+                                    new_cell.number_format = copy(src_cell.number_format)
+                                    new_cell.protection = copy(src_cell.protection)
+                                    new_cell.alignment = copy(src_cell.alignment)
+                        
+                        wb.save(EXCEL_PATH)
+                        st.success(f"✅ Submission saved to Excel successfully as {next_id}!")
+                except Exception as e:
+                    st.error(f"❌ Failed to save: {e}")
 
 # ------------------------------------------------------------------------------
 # TAB 2: DATA & TEMPLATE UPLOAD
@@ -481,22 +661,26 @@ with tab_upload:
         
         # Read and display data preview
         data_preview_html = ""
-        df_data = None
         if uploaded_data is not None:
             try:
+                uploaded_data.seek(0)
                 if uploaded_data.name.endswith(".csv"):
-                    df_data = pd.read_csv(uploaded_data)
+                    st.session_state.df_data = pd.read_csv(uploaded_data)
                 else:
-                    df_data = pd.read_excel(uploaded_data)
+                    st.session_state.df_data = pd.read_excel(uploaded_data)
                 
-                st.success(f"Successfully loaded: `{uploaded_data.name}` ({len(df_data)} rows)")
+                st.success(f"Successfully loaded: `{uploaded_data.name}` ({len(st.session_state.df_data)} rows)")
                 st.markdown("##### File Preview (First 5 Rows):")
-                st.dataframe(df_data.head(5), use_container_width=True)
+                st.dataframe(st.session_state.df_data.head(5), use_container_width=True)
                 
                 # Format to a table string for the LLM
-                data_preview_html = df_data.head(20).to_html(index=False, classes="data-table")
+                data_preview_html = st.session_state.df_data.head(20).to_html(index=False, classes="data-table")
             except Exception as e:
                 st.error(f"Error reading file: {e}")
+        else:
+            st.session_state.df_data = None
+            
+        df_data = st.session_state.df_data
         st.markdown('</div>', unsafe_allow_html=True)
         
     with col_template:
@@ -511,23 +695,26 @@ with tab_upload:
         )
         
         # Load custom or default template
-        template_content = ""
         default_template_path = os.path.join(script_dir, "sample_template.html")
         
         if uploaded_template is not None:
             try:
-                template_content = uploaded_template.read().decode("utf-8")
+                uploaded_template.seek(0)
+                st.session_state.template_content = uploaded_template.read().decode("utf-8")
                 st.success(f"Custom template loaded: `{uploaded_template.name}`")
             except Exception as e:
                 st.error(f"Error reading template: {e}")
         else:
             if os.path.exists(default_template_path):
                 with open(default_template_path, "r", encoding="utf-8") as f:
-                    template_content = f.read()
+                    st.session_state.template_content = f.read()
                 st.info("ℹ️ Using default SmartPropGuid template.")
             else:
+                st.session_state.template_content = ""
                 st.warning("⚠️ System default template not found. Please upload a template.")
                 
+        template_content = st.session_state.template_content
+        
         # Template preview in a collapsible expander
         if template_content:
             with st.expander("👁️ View Template HTML Structure"):
@@ -570,13 +757,51 @@ with tab_generate:
             generate_btn = st.button("✨ Generate AI Report", type="primary", use_container_width=True)
 
         if generate_btn:
+            # Get postcode from suburb input
+            suburb_input = st.session_state.get("suburb", "").strip()
+            postcode_str = ""
+            if suburb_input:
+                import re
+                pm = re.search(r"\b\d{3,4}\b", suburb_input)
+                postcode_str = pm.group(0) if pm else ""
+
+            # Try to auto-load from Property_Data_Split if no manual file is uploaded
+            df_active = st.session_state.get("df_data")
+            if df_active is None and postcode_str:
+                try:
+                    pc_val = float(postcode_str)
+                    split_dir = r"C:\Users\ahmma\Desktop\Property_Data_Split"
+                    if os.path.exists(split_dir):
+                        for fname in os.listdir(split_dir):
+                            if fname.startswith("postcode_") and fname.endswith(".csv"):
+                                parts = fname.replace("postcode_", "").replace(".csv", "").split("_to_")
+                                if len(parts) == 2:
+                                    start_pc = float(parts[0])
+                                    end_pc = float(parts[1])
+                                    if start_pc <= pc_val <= end_pc:
+                                        csv_path = os.path.join(split_dir, fname)
+                                        df_active = pd.read_csv(csv_path)
+                                        st.info(f"ℹ️ Automatically loaded postcode dataset: `{fname}`")
+                                        break
+                except Exception as e:
+                    st.warning(f"⚠️ Could not auto-load postcode dataset: {e}")
+
+            # Filter data to make prompt compact and relevant
+            df_filtered = None
+            if df_active is not None:
+                df_filtered = filter_property_data(
+                    df_active, 
+                    postcode_str, 
+                    st.session_state.get("budget", ""), 
+                    st.session_state.get("property_type", "")
+                )
+
             # Prepare instructions and data details to inject into Gemini prompt
             data_context = ""
-            if df_data is not None:
-                # Include a text presentation of listings
-                data_context = f"Manual Listings Data Compiled:\n{df_data.to_string(index=False)}"
+            if df_filtered is not None and len(df_filtered) > 0:
+                data_context = f"Manual Listings Data Compiled (Filtered for Postcode {postcode_str}):\n{df_filtered.to_string(index=False)}"
             else:
-                data_context = "No Listing data uploaded. Generate standard market advice for the suburb based on public statistics."
+                data_context = "No Listing data matching the criteria was found or uploaded. Generate standard market advice for the suburb based on public statistics."
 
             # Build Prompt
             full_prompt = f"""
@@ -608,24 +833,26 @@ with tab_generate:
             6. Do NOT wrap the code in markdown blocks like ````html```` or add any conversational intro/outro text. Output only raw HTML.
             """
 
-            with st.spinner("AI is analyzing data and populating report layout..."):
-                try:
-                    # Request model completion
-                    response = genai.GenerativeModel('gemini-2.5-flash').generate_content(full_prompt)
-                    
-                    # Store output in session state
-                    clean_html = response.text.strip()
-                    # Clean markdown code fences if model accidentally output them
-                    if clean_html.startswith("```html"):
-                        clean_html = clean_html[7:]
-                    if clean_html.endswith("```"):
-                        clean_html = clean_html[:-3]
-                    clean_html = clean_html.strip()
-                    
-                    st.session_state.generated_report_html = clean_html
-                    st.success("✅ Report generated successfully!")
-                except Exception as e:
-                    st.error(f"Failed to generate report from Gemini API: {e}")
+            loader_placeholder = start_loader("AI is analyzing data and populating report layout…")
+            try:
+                # Request model completion
+                response = genai.GenerativeModel('gemini-2.5-flash').generate_content(full_prompt)
+                
+                # Store output in session state
+                clean_html = response.text.strip()
+                # Clean markdown code fences if model accidentally output them
+                if clean_html.startswith("```html"):
+                    clean_html = clean_html[7:]
+                if clean_html.endswith("```"):
+                    clean_html = clean_html[:-3]
+                clean_html = clean_html.strip()
+                
+                st.session_state.generated_report_html = clean_html
+                st.success("✅ Report generated successfully!")
+            except Exception as e:
+                st.error(f"Failed to generate report from Gemini API: {e}")
+            finally:
+                stop_loader(loader_placeholder)
 
         # Render generated report and PDF download option if exists
         if st.session_state.generated_report_html:
@@ -635,14 +862,56 @@ with tab_generate:
             html_code = st.session_state.generated_report_html
             
             # Compiling helper to convert HTML to PDF bytes
-            def get_pdf_bytes(html_text):
-                pdf_io = io.BytesIO()
-                pisa_status = pisa.CreatePDF(html_text, dest=pdf_io)
-                if pisa_status.err:
-                    return None
-                return pdf_io.getvalue()
+            # def get_pdf_bytes(html_text):
+            #     pdf_io = io.BytesIO()
+            #     pisa_status = pisa.CreatePDF(html_text, dest=pdf_io)
+            #     if pisa_status.err:
+            #         return None
+            #     return pdf_io.getvalue()
+
+            def to_data_uri(path, mime):
+                with open(path, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode("utf-8")
+                return f"data:{mime};base64,{b64}"
+
+            logo_uri = to_data_uri(os.path.join(script_dir, "LOGO.svg"), "image/svg+xml")
+            house_uri = to_data_uri(os.path.join(script_dir, "House.png"), "image/png")
+
+            html_code = html_code.replace('src="LOGO.svg"', f'src="{logo_uri}"')
+            html_code = html_code.replace('src="House.png"', f'src="{house_uri}"')
+
+            async def get_pdf_bytes_playwright(html_text):
+                async with async_playwright() as p:
+                    browser = await p.chromium.launch()
+                    try:
+                        page = await browser.new_page()
+                        await page.set_content(html_text, wait_until="networkidle")
+                        
+                        pdf_bytes = await page.pdf(
+                            format="A4",
+                            print_background=True,
+                            margin={"top": "0px", "right": "0px", "bottom": "14mm", "left": "0px"},
+                            display_header_footer=True,
+                            header_template="<span></span>",  # empty — suppresses Chromium's default title/url header
+                            footer_template="""
+                                <div style="width:100%; font-family:'Helvetica Neue', Helvetica, Arial, sans-serif;
+                                            font-size:8pt; color:#71717a; text-align:right; padding-right:12mm;">
+                                    Page <span class="pageNumber"></span> of <span class="totalPages"></span>
+                                </div>
+                            """,
+                        )
+                        return pdf_bytes
+                    finally:
+                        # This ensures the browser ALWAYS closes, even if an error occurs
+                        await browser.close()
+
+            # In Streamlit, use asyncio to run this:
+            # pdf_bytes = asyncio.run(get_pdf_bytes_playwright(html_code))
                 
-            pdf_bytes = get_pdf_bytes(html_code)
+            
+            pdf_bytes = asyncio.run(get_pdf_bytes_playwright(html_code))
+
+
             
             # Download Button
             if pdf_bytes:

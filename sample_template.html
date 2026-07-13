@@ -1,182 +1,551 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
+
 <head>
-<meta charset="utf-8">
-<title>Property Report</title>
-<style>
-    @page {
-        size: A4;
-        margin: 2cm;
-        @bottom-right {
-            content: "Page " counter(page) " of " counter(pages);
-            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-            font-size: 8pt;
-            color: #71717a;
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Property Report</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+        href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,300;0,400;0,500;0,700&family=Helvetica+Neue&display=swap"
+        rel="stylesheet" />
+
+    <style>
+        /* ============================================================
+       GLOBAL RESET
+       ============================================================ */
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
         }
-    }
-    body {
-        font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-        color: #18181b;
-        line-height: 1.5;
-        font-size: 10pt;
-    }
-    h1 {
-        font-size: 24pt;
-        color: #0f172a;
-        margin-bottom: 5px;
-        border-bottom: 2px solid #2563eb;
-        padding-bottom: 10px;
-    }
-    h2 {
-        font-size: 16pt;
-        color: #1e293b;
-        margin-top: 20px;
-        margin-bottom: 10px;
-        border-bottom: 1px solid #e2e8f0;
-        padding-bottom: 5px;
-    }
-    h3 {
-        font-size: 12pt;
-        color: #334155;
-        margin-top: 15px;
-        margin-bottom: 5px;
-    }
-    .header-table {
-        width: 100%;
-        margin-bottom: 30px;
-    }
-    .header-table td {
-        vertical-align: top;
-    }
-    .meta-label {
-        font-weight: bold;
-        color: #4b5563;
-        font-size: 9pt;
-        text-transform: uppercase;
-    }
-    .meta-value {
-        font-size: 11pt;
-        color: #1f2937;
-        margin-bottom: 10px;
-    }
-    .highlight-card {
-        background-color: #f8fafc;
-        border-left: 4px solid #2563eb;
-        padding: 15px;
-        margin-bottom: 20px;
-        border-radius: 4px;
-    }
-    table.data-table {
-        width: 100%;
-        border-collapse: collapse;
-        margin-top: 15px;
-        margin-bottom: 15px;
-    }
-    table.data-table th {
-        background-color: #f1f5f9;
-        color: #475569;
-        font-weight: bold;
-        text-align: left;
-        padding: 8px;
-        border: 1px solid #cbd5e1;
-        font-size: 9pt;
-    }
-    table.data-table td {
-        padding: 8px;
-        border: 1px solid #cbd5e1;
-        font-size: 9.5pt;
-    }
-    .badge {
-        display: inline-block;
-        padding: 2px 6px;
-        border-radius: 4px;
-        font-size: 8pt;
-        font-weight: bold;
-    }
-    .badge-green { background-color: #dcfce7; color: #166534; }
-    .badge-blue { background-color: #dbeafe; color: #1e40af; }
-    .badge-amber { background-color: #fef3c7; color: #92400e; }
-    
-    .footer {
-        margin-top: 40px;
-        font-size: 8pt;
-        color: #6b7280;
-        text-align: center;
-        border-top: 1px solid #e5e7eb;
-        padding-top: 10px;
-    }
-</style>
+
+        /* On-screen preview: stack the two A4 "pages" with a gap.
+       (Removed for print — see @media print at the bottom.) */
+        body {
+            background-color: #162338;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+            padding: 40px 20px;
+        }
+
+        /* Print pagination (page numbers on the report pages) */
+        @page {
+            size: A4;
+            margin: 2cm;
+
+            @bottom-right {
+                content: "Page " counter(page) " of " counter(pages);
+                font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+                font-size: 8pt;
+                color: #71717a;
+            }
+        }
+
+        /* ============================================================
+       TITLE PAGE — exact styles from style.css, untouched.
+       Everything below is scoped to .page so it can never leak
+       into the report body.
+       ============================================================ */
+        .page {
+            width: 210mm;
+            height: 297mm;
+            background-color: #162338;
+            /* explicit now — no longer relies on body's bg showing through */
+            border: 2px solid beige;
+            border-radius: 2px;
+            position: relative;
+            overflow: hidden;
+            contain: paint;
+            /* tells Chromium nothing outside this box affects layout/pagination */
+            box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+            font-family: 'DM Sans', sans-serif;
+            break-inside: avoid;
+            break-after: page;
+        }
+
+        .page .header-line {
+            position: absolute;
+            top: 28mm;
+            left: 12mm;
+            right: 12mm;
+            height: 1px;
+            background-color: rgba(215, 179, 94, 0.25);
+            z-index: 10;
+        }
+
+        .page .logo {
+            position: absolute;
+            top: 12mm;
+            left: 12mm;
+            width: 40mm;
+            height: auto;
+            z-index: 10;
+        }
+
+        .page .block-image-wrapper {
+            position: absolute;
+            top: 35mm;
+            left: 31mm;
+            width: 230mm;
+            height: 90mm;
+            transform: rotate(135deg);
+            transform-origin: center center;
+            z-index: 0;
+            overflow: hidden;
+        }
+
+        .page .block-image {
+            position: absolute;
+            top: 300px;
+            left: 300px;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: rotate(225deg) scale(2);
+        }
+
+        .page .block {
+            position: absolute;
+            top: 110mm;
+            left: -80mm;
+            width: 180mm;
+            height: 85mm;
+            background-color: beige;
+            border-radius: 90px 0 0 0;
+            transform: rotate(225deg);
+            transform-origin: center center;
+            z-index: 0;
+        }
+
+        .page .triangle {
+            position: absolute;
+            top: 100mm;
+            left: 32mm;
+            width: 90mm;
+            height: 80mm;
+            background-color: #d7b35e;
+            clip-path: polygon(96% 7%, 38% 100%, 0% 70%);
+            opacity: 0.8;
+            transform: rotate(100deg);
+            transform-origin: center center;
+            z-index: 2;
+        }
+
+        .page .text-location {
+            position: absolute;
+            bottom: 118mm;
+            left: 1mm;
+            width: 100mm;
+            text-align: center;
+            font-size: 8pt;
+            font-weight: 600;
+            color: rgba(22, 35, 56, 0.7);
+            letter-spacing: 0.18em;
+            z-index: 10;
+        }
+
+        .page .text-suburb {
+            position: absolute;
+            bottom: 105mm;
+            left: 1mm;
+            width: 100mm;
+            text-align: center;
+            font-size: 32pt;
+            font-weight: 700;
+            color: #162338;
+            z-index: 10;
+            line-height: 1.1;
+        }
+
+        .page .text-postcode {
+            position: absolute;
+            bottom: 95mm;
+            left: 1mm;
+            width: 100mm;
+            text-align: center;
+            font-size: 22pt;
+            font-weight: 300;
+            color: #162338;
+            opacity: 0.75;
+            z-index: 10;
+        }
+
+        .page .text-label-wrapper {
+            position: absolute;
+            bottom: 50mm;
+            right: 12mm;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            z-index: 10;
+        }
+
+        .page .text-label-line {
+            display: block;
+            width: 20px;
+            height: 1px;
+            background-color: #ffffff;
+            opacity: 0.6;
+        }
+
+        .page .text-label {
+            font-size: 11pt;
+            font-weight: 500;
+            color: #ffffff;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+        }
+
+        .page .stats-row {
+            position: absolute;
+            bottom: 22mm;
+            left: 12mm;
+            right: 12mm;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            z-index: 10;
+        }
+
+        .page .stat-box {
+            flex: 1;
+            text-align: center;
+        }
+
+        .page .stat-value {
+            font-size: 16pt;
+            font-weight: 700;
+            color: #d7b35e;
+            line-height: 1.2;
+        }
+
+        .page .stat-key {
+            font-size: 7pt;
+            font-weight: 400;
+            color: rgba(255, 255, 255, 0.5);
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            margin-top: 2px;
+        }
+
+        .page .stat-divider {
+            width: 1px;
+            height: 10mm;
+            background-color: rgba(215, 179, 94, 0.3);
+        }
+
+        .page .footer {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 10;
+        }
+
+        .page .footer-line {
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #d7b35e, transparent);
+        }
+
+        .page .footer-text {
+            text-align: center;
+            font-size: 6.5pt;
+            font-weight: 400;
+            color: rgba(215, 179, 94, 0.45);
+            letter-spacing: 0.2em;
+            text-transform: uppercase;
+            padding: 4px 0 6px;
+        }
+
+        /* ============================================================
+       REPORT BODY — exact styles from main_sample.html, scoped
+       under .report-body so nothing here can touch the title page.
+       ============================================================ */
+        .report-body {
+            width: 210mm;
+            min-height: 297mm;
+            /* min, not fixed — this content is allowed to flow across pages */
+            background-color: #ffffff;
+            padding: 40px;
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            color: #18181b;
+            line-height: 1.5;
+            font-size: 10pt;
+        }
+
+        .report-body h1 {
+            font-size: 24pt;
+            color: #0f172a;
+            margin-bottom: 5px;
+            border-bottom: 2px solid #2563eb;
+            padding-bottom: 10px;
+        }
+
+        .report-body h2 {
+            font-size: 16pt;
+            color: #1e293b;
+            margin-top: 20px;
+            margin-bottom: 10px;
+            border-bottom: 1px solid #e2e8f0;
+            padding-bottom: 5px;
+        }
+
+        .report-body h3 {
+            font-size: 12pt;
+            color: #334155;
+            margin-top: 15px;
+            margin-bottom: 5px;
+        }
+
+        .report-body .header-table {
+            width: 100%;
+            margin-bottom: 30px;
+        }
+
+        .report-body .header-table td {
+            vertical-align: top;
+        }
+
+        .report-body .meta-label {
+            font-weight: bold;
+            color: #4b5563;
+            font-size: 9pt;
+            text-transform: uppercase;
+        }
+
+        .report-body .meta-value {
+            font-size: 11pt;
+            color: #1f2937;
+            margin-bottom: 10px;
+        }
+
+        .report-body .highlight-card {
+            background-color: #f8fafc;
+            border-left: 4px solid #2563eb;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+
+        .report-body table.data-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            margin-bottom: 15px;
+        }
+
+        .report-body table.data-table th {
+            background-color: #f1f5f9;
+            color: #475569;
+            font-weight: bold;
+            text-align: left;
+            padding: 8px;
+            border: 1px solid #cbd5e1;
+            font-size: 9pt;
+        }
+
+        .report-body table.data-table td {
+            padding: 8px;
+            border: 1px solid #cbd5e1;
+            font-size: 9.5pt;
+        }
+
+        .report-body .badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 8pt;
+            font-weight: bold;
+        }
+
+        .report-body .badge-green {
+            background-color: #dcfce7;
+            color: #166534;
+        }
+
+        .report-body .badge-blue {
+            background-color: #dbeafe;
+            color: #1e40af;
+        }
+
+        .report-body .badge-amber {
+            background-color: #fef3c7;
+            color: #92400e;
+        }
+
+        .report-body .footer {
+            margin-top: 40px;
+            font-size: 8pt;
+            color: #6b7280;
+            text-align: center;
+            border-top: 1px solid #e5e7eb;
+            padding-top: 10px;
+        }
+
+        /* ============================================================
+       PRINT
+       ============================================================ */
+        @media print {
+            body {
+                background: none;
+                padding: 0;
+                margin: 0;
+                gap: 0;
+            }
+
+            .page {
+                width: 210mm;
+                height: 297mm;
+                border: none;
+                box-shadow: none;
+                border-radius: 0;
+                page-break-after: always;
+                break-after: page;
+            }
+
+            .report-body {
+                width: 210mm;
+                min-height: 297mm;
+                border: none;
+                box-shadow: none;
+                border-radius: 0;
+                page-break-after: auto;
+                /* content flows/paginates naturally, no forced trailing blank page */
+                break-after: auto;
+            }
+        }
+    </style>
 </head>
+
 <body>
 
-    <table class="header-table">
-        <tr>
-            <td>
-                <h1>SmartPropGuid Report</h1>
-                <div style="color: #64748b; font-size: 11pt;">Prepared for Local Property Search & Analysis</div>
-            </td>
-            <td style="text-align: right; width: 200px;">
-                <div class="meta-label">Date Generated</div>
-                <div class="meta-value">{{ date_generated }}</div>
-                <div class="meta-label">Target Suburb</div>
-                <div class="meta-value">{{ suburb }}</div>
-            </td>
-        </tr>
-    </table>
+    <!-- ============================================================
+       PAGE 1 — TITLE PAGE (from report.html, unchanged)
+       ============================================================ -->
+    <div class="page">
+        <img class="logo" src="LOGO.svg" alt="Logo" />
 
-    <div class="highlight-card">
-        <h2>Executive Summary</h2>
-        <p>{{ executive_summary }}</p>
+        <div class="block-image-wrapper">
+            <img class="block-image" src="House.png" alt="House" />
+        </div>
+
+        <div class="triangle"></div>
+        <div class="block"></div>
+
+        <div class="text-location">NEW SOUTH WALES, AUSTRALIA</div>
+        <div class="text-suburb">{{ suburb }}</div>
+        <div class="text-postcode">{{ postcode }}</div>
+
+        <div class="text-label-wrapper">
+            <span class="text-label-line"></span>
+            <span class="text-label">Suburb Report</span>
+        </div>
+
+        <div class="stats-row">
+            <div class="stat-box">
+                <div class="stat-value">{{ median_price }}</div>
+                <div class="stat-key">Median Price</div>
+            </div>
+            <div class="stat-divider"></div>
+            <div class="stat-box">
+                <div class="stat-value">{{ clearance_rate }}</div>
+                <div class="stat-key">Clearance Rate</div>
+            </div>
+            <div class="stat-divider"></div>
+            <div class="stat-box">
+                <div class="stat-value">{{ dom }}</div>
+                <div class="stat-key">Days on Market</div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <div class="footer-line"></div>
+            <div class="footer-text">Provided by SMARTPROPGUIDE</div>
+        </div>
     </div>
 
-    <h2>Client Preferences Summary</h2>
-    <table class="data-table">
-        <tr>
-            <td style="width: 30%; font-weight: bold;">Property Type</td>
-            <td>{{ property_type }}</td>
-        </tr>
-        <tr>
-            <td style="font-weight: bold;">Target Suburb / Area</td>
-            <td>{{ suburb }}</td>
-        </tr>
-        <tr>
-            <td style="font-weight: bold;">Budget Bracket</td>
-            <td>{{ budget }}</td>
-        </tr>
-        <tr>
-            <td style="font-weight: bold;">Buying Intention</td>
-            <td>{{ intention }}</td>
-        </tr>
-        <tr>
-            <td style="font-weight: bold;">Key Priorities</td>
-            <td>{{ key_priorities }}</td>
-        </tr>
-    </table>
-
-    <h2>Market & Property Analysis</h2>
-    <p>{{ market_analysis }}</p>
-
-    <h2>Pre-Selected Source Data Matches</h2>
-    <table class="data-table">
-        <thead>
+    <!-- ============================================================
+       PAGE 2+ — REPORT BODY (from main_sample.html, unchanged)
+       ============================================================ -->
+    <div class="report-body">
+        <table class="header-table">
             <tr>
-                <th style="width: 45%;">Property Address</th>
-                <th style="width: 20%;">Price Range</th>
-                <th style="width: 15%;">Match Score</th>
-                <th style="width: 20%;">Status</th>
+                <td>
+                    <h1>SmartPropGuid Report</h1>
+                    <div style="color: #64748b; font-size: 11pt;">Prepared for Local Property Search & Analysis</div>
+                </td>
+                <td style="text-align: right; width: 200px;">
+                    <div class="meta-label">Date Generated</div>
+                    <div class="meta-value">{{ date_generated }}</div>
+                    <div class="meta-label">Target Suburb</div>
+                    <div class="meta-value">{{ suburb }}</div>
+                </td>
             </tr>
-        </thead>
-        <tbody>
-            {{ source_data_rows }}
-        </tbody>
-    </table>
+        </table>
 
-    <h2>Strategic Recommendations</h2>
-    <p>{{ recommendations }}</p>
+        <div class="highlight-card">
+            <h2>Executive Summary</h2>
+            <p>{{ executive_summary }}</p>
+        </div>
 
-    <div class="footer">
-        Disclaimer: This report is generated by SmartPropGuid AI based on manual data uploads and customer preferences. It does not constitute formal financial advice.
+        <h2>Client Preferences Summary</h2>
+        <table class="data-table">
+            <tr>
+                <td style="width: 30%; font-weight: bold;">Property Type</td>
+                <td>{{ property_type }}</td>
+            </tr>
+            <tr>
+                <td style="font-weight: bold;">Target Suburb / Area</td>
+                <td>{{ suburb }}</td>
+            </tr>
+            <tr>
+                <td style="font-weight: bold;">Budget Bracket</td>
+                <td>{{ budget }}</td>
+            </tr>
+            <tr>
+                <td style="font-weight: bold;">Buying Intention</td>
+                <td>{{ intention }}</td>
+            </tr>
+            <tr>
+                <td style="font-weight: bold;">Key Priorities</td>
+                <td>{{ key_priorities }}</td>
+            </tr>
+        </table>
+
+        <h2>Market & Property Analysis</h2>
+        <p>{{ market_analysis }}</p>
+
+        <h2>Pre-Selected Source Data Matches</h2>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th style="width: 45%;">Property Address</th>
+                    <th style="width: 20%;">Price Range</th>
+                    <th style="width: 15%;">Match Score</th>
+                    <th style="width: 20%;">Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{ source_data_rows }}
+            </tbody>
+        </table>
+
+        <h2>Strategic Recommendations</h2>
+        <p>{{ recommendations }}</p>
+
+        <div class="footer">
+            Disclaimer: This report is generated by SmartPropGuid AI based on manual data uploads and customer
+            preferences. It does not constitute formal financial advice.
+        </div>
     </div>
 
 </body>
+
 </html>
