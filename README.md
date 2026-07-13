@@ -60,3 +60,11 @@ Ensure your local environment is running Python 3.9+ and contains an active Gemi
    ```bash
    git clone [https://github.com/your-username/your-repo-name.git](https://github.com/your-username/your-repo-name.git)
    cd your-repo-name
+
+## 📸 App Screenshots
+
+### Dark Mode Interface
+![Dark Mode Dashboard](Screenshots/A1.png)
+
+### Light Mode Interface
+![Light Mode Dashboard](Screenshots/A2.png)
