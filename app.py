@@ -798,11 +798,23 @@ with tab_generate:
 
             # Prepare instructions and data details to inject into Gemini prompt
             data_context = ""
+            source_data_rows = ""
             if df_filtered is not None and len(df_filtered) > 0:
                 data_context = f"Manual Listings Data Compiled (Filtered for Postcode {postcode_str}):\n{df_filtered.to_string(index=False)}"
+                # Build HTML rows for the report
+                rows = []
+                for _, r in df_filtered.iterrows():
+                    address = r.get('Address') or r.get('Property address') or ''
+                    price = r.get('Purchase price') or r.get('Price') or ''
+                    rows.append(f"<tr><td>{address}</td><td>{price}</td><td><span class='badge badge-blue'>Score</span></td><td><span class='badge badge-green'>Available</span></td></tr>")
+                source_data_rows = "".join(rows)
             else:
-                data_context = "No Listing data matching the criteria was found or uploaded. Generate standard market advice for the suburb based on public statistics."
+                st.warning("No matching listings data found. Report will be generated without property rows.")
+                data_context = "No listing data uploaded or matching the criteria."
 
+            # Inject rows into the selected HTML template
+            filled_template = st.session_state.template_content.replace("{{ source_data_rows }}", source_data_rows)
+            
             # Build Prompt
             full_prompt = f"""
             You are a professional property investment analyst assistant.
@@ -820,15 +832,13 @@ with tab_generate:
             {data_context}
             
             --- HTML REPORT TEMPLATE ---
-            {template_content}
+            {filled_template}
 
             --- COMPILING INSTRUCTIONS ---
             1. Populate all variable placeholders in the HTML template (like `{{ executive_summary }}`, `{{ market_analysis }}`, `{{ key_priorities }}`, `{{ date_generated }}`).
             2. For `{{ date_generated }}`, use today's date: {datetime.date.today().strftime("%B %d, %Y")}.
             3. For `{{ key_priorities }}`, output a bulleted list based on the inputs.
-            4. Populate `{{ source_data_rows }}` by matching properties from the listing data that suit the client's preferences. Render each matching listing as a table row:
-               `<tr><td>Address</td><td>Price</td><td><span class="badge badge-blue">Score</span></td><td><span class="badge badge-green">Available</span></td></tr>`
-               If no listings data is provided, synthesize 3 plausible mockup properties for the target suburb that match the budget and type, and add them as table rows.
+            4. The placeholder `{{ source_data_rows }}` has already been replaced with actual rows in the template.
             5. Return ONLY the complete, final HTML code starting with `<!DOCTYPE html>` and ending with `</html>`.
             6. Do NOT wrap the code in markdown blocks like ````html```` or add any conversational intro/outro text. Output only raw HTML.
             """
