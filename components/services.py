@@ -1,3 +1,6 @@
+import webbrowser
+from jinja2 import debug
+from google.ai.generativelanguage_v1beta.services.cache_service import pagers
 from pypdf import pagerange
 import os
 import datetime
@@ -199,8 +202,15 @@ class GeminiService:
 class TemplateService:
     """
     Renders sample_template.html (a Jinja2 template) with a data dict.
-    Uses StrictUndefined so a missing key raises immediately instead of
-    silently rendering blank content -- easier to catch data/prompt bugs.
+
+    Uses the lenient `Undefined` (not `StrictUndefined`): a missing key
+    renders as blank instead of raising. This is intentional -- it's what
+    lets the data_notice() macro and `{{ x | default(...) }}` fallbacks in
+    the template degrade gracefully when Gemini's JSON is missing a field,
+    rather than crashing the whole report generation over one gap. Report
+    Generation's own validation pass (report_generation.py) is what
+    actually catches and flags missing/unavailable sections before they
+    ever reach this render step -- this class stays a "dumb" renderer.
     """
     def __init__(self):
         self._env = Environment(loader=BaseLoader(), undefined=Undefined, autoescape=False)
@@ -212,30 +222,11 @@ class TemplateService:
 
 class PdfService:
 
-    FOOTER_TEMPLATE = """
-    <div style="width:100vw; font-family: 'DM Sans', Arial, sans-serif; box-sizing:border-box; margin: 0;padding: 0;">
-      <div style="width:100%; height:1px;
-                  background:linear-gradient(90deg, rgba(215,179,94,0.08), #d7b35e);"></div>
-      <div style="width:100%; background:#162338; -webkit-print-color-adjust:exact; print-color-adjust:exact;
-                  box-sizing:border-box; padding: 3mm 12mm; display:flex; align-items:center; justify-content:space-between;">
-        <span style="font-size:6.5pt; color:rgba(255,255,255,0.3); letter-spacing:0.15em;
-                     text-transform:uppercase;">Provided by SmartPropGuide12121212</span>
-        <span class="pageNumber" style="font-size:9pt; font-weight:500; color:#d7b35e; letter-spacing:0.1em;"></span>
-      </div>
-    </div>
-    <script>
-      window.addEventListener('DOMContentLoaded', () => {
-        const el = document.querySelector('.pageNumber');
-        if (el) { el.textContent = el.textContent.padStart(2, '0'); }
-      });
-    </script>
-    """
-
     # Margin reserved on content pages for the header/footer band above.
     # Must be >= the actual rendered height of the templates, or Chromium
     # clips them. Nudge these if the banner ever looks cramped/cut off.
-    CONTENT_MARGIN_TOP = "0mm"
-    CONTENT_MARGIN_BOTTOM = "0mm"
+    CONTENT_MARGIN_TOP = "14mm"
+    CONTENT_MARGIN_BOTTOM = "14mm"
     # Left/right stay at 0 — .report-section (in sample_template_fixed.html)
     # already carries its own consistent 12mm inset. Adding page-level
     # margin on top of that would reintroduce the double-margin bug.
@@ -275,96 +266,217 @@ class PdfService:
         # sample_template_fixed.html first.
         async with async_playwright() as p:
             browser = await p.chromium.launch()
+            title_page = await browser.new_page()
+            content_page = await browser.new_page()
             try:
-                page = await browser.new_page()
-                await page.set_content(html_text, wait_until="networkidle")
-
-                # --- PDF #1: title page only, full-bleed, no header/footer ---
-                await page.add_style_tag(
-                    content=".report-body { display: none !important; }"
-                )
-                title_pdf_bytes = await page.pdf(
-                    width="210mm",
-                    height="297mm",
-                    print_background=True,
-                    margin={"top": "0mm", "right": "0mm", "bottom": "0mm", "left": "0mm"},
-                    display_header_footer=False,
-                )
-
-                # --- PDF #2: content only, flows freely, repeating header/footer ---
-                await page.add_style_tag(
-                    content="""
-                    .page:first-of-type { display: none !important; }
-                    .report-body { display: block !important; }
-                    """
-                )
+                await title_page.set_content(html_text, wait_until="networkidle")
                 logo_uri = self.to_data_uri(
                     self.config.get_asset_path("LOGO.svg"), "image/svg+xml"
                 )
 
-                HEADER_TEMPLATE = f"""  
-                                    <div
-                                    style="
-                                    position:absolute;
-                                    left:0;
-                                    right:0;
-                                    top:0;
-                                    height:10mm;
-                                    background:#162338;
-                                    -webkit-print-color-adjust:exact;
-                                    print-color-adjust:exact;
-                                    ">
+                HEADER_TEMPLATE = f"""
+                <div style="
+                    width:100%;
+                    height:10mm;
+                    margin:0;
+                    padding:0;
+                    position:absolute;
+                    left:0;
+                    right:0;
+                    bottom:0;
+                    box-sizing:border-box;
+                    background:#162338;
+                    -webkit-print-color-adjust:exact;
+                    print-color-adjust:exact;
+                ">
+                    <table style="
+                        width:100%;
+                        height:100%;
+                        border-collapse:collapse;
+                        margin:0;
+                        padding:0;
+                    ">
+                        <tr>
+                            <td style="padding-left:12mm; vertical-align:middle;">
+                                <img src="{logo_uri}" style="height:8mm;">
+                            </td>
 
-                                        <table
-                                        style="
-                                        width:100%;
-                                        height:100%;
-                                        border-collapse:collapse;
-                                        ">
-                                            <tr>
-                                                <td style="padding-left:12mm;">
-                                                    <img src="{logo_uri}" style="height:8mm;">
-                                                </td>
-
-                                                <td align="right"
-                                                    style="
-                                                    padding-right:12mm;
-                                                    color:#d7b35e;
-                                                    font-family:'DM Sans',Arial;
-                                                    font-size:10pt;
-                                                    letter-spacing:0.25em;
-                                                    text-transform:uppercase;">
-                                                    Suburb Report
-                                                </td>
-                                            </tr>
-                                        </table>
-                                    </div>
-
-                                    <div style="
+                            <td style="
+                                padding-right:12mm;
+                                text-align:right;
+                                vertical-align:middle;
+                                color:#ffffff;
+                            ">
+                                SMARTPROPGUIDE
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+                """
+                FOOTER_TEMPLATE = """
+                                <div style="
+                                    width:100%;
+                                    height:14mm;
+                                    margin:0;
+                                    padding:0;
                                     position:absolute;
                                     left:0;
                                     right:0;
                                     bottom:0;
-                                    height:1px;
-                                    background:#d7b35e;
+                                    box-sizing:border-box;
+                                    background:#162338;
+                                    color:#ffffff;
+                                    font-family:Arial, sans-serif;
+                                    font-size:8pt;
+                                    -webkit-print-color-adjust:exact;
+                                    print-color-adjust:exact;
+                                ">
+                                    <table style="
+                                        width:100%;
+                                        height:100%;
+                                        border-collapse:collapse;
+                                        margin:0;
+                                        padding:0;
                                     ">
-                                    </div>
+                                        <tr>
+                                            <td style="
+                                                padding-left:12mm;
+                                                vertical-align:middle;
+                                                color:#ffffff;
+                                            ">
+                                                Provided by SMARTPROPGUIDE
+                                            </td>
+
+                                            <td style="
+                                                padding-right:12mm;
+                                                text-align:right;
+                                                vertical-align:middle;
+                                                color:#ffffff;
+                                            ">
+                                                <span class="pageNumber" style="font-size:9pt; font-weight:500; color:#d7b35e; letter-spacing:0.1em;"></span>
+                                            </td>
+                                        </tr>
+                                    </table>
+                                </div>
+                        <script>
+                        
+                        window.addEventListener('DOMContentLoaded', () => {
+                            const el = document.querySelector('.pageNumber');
+                            if (el) { el.textContent = el.textContent.padStart(2, '0'); }
+                        });
+                        </script>
+                        """
+
+                await title_page.add_style_tag(
+                    content="""
+                    .report-body {
+                        display: none !important;
+                    }
+
+                    html,
+                    body {
+                        margin: 0 !important;
+                        padding: 0 !important;
+                        width: 210mm !important;
+                        min-width: 210mm !important;
+                        max-width: 210mm !important;
+                        background: transparent !important;
+                    }
+
+                    .page {
+                        display: block !important;
+                        width: 210mm !important;
+                        height: 297mm !important;
+                        min-width: 210mm !important;
+                        max-width: 210mm !important;
+                        min-height: 297mm !important;
+                        max-height: 297mm !important;
+
+                        margin: 0 !important;
+                        padding: 0 !important;
+
+                        box-sizing: border-box !important;
+                        overflow: hidden !important;
+                    }
                     """
-                content_pdf_bytes = await page.pdf(
-                    format="A4",
+                )
+
+                title_pdf_bytes = await title_page.pdf(
+                    width="210mm",
+                    height="297mm",
+                    print_background=True,
+                    margin={
+                        "top": "0mm",
+                        "right": "0mm",
+                        "bottom": "0mm",
+                        "left": "0mm",
+                    },
+                    display_header_footer=False,
+                )
+
+                
+
+                # ============================================================
+                # CONTENT PAGES
+                # ============================================================
+
+                await content_page.set_content(html_text, wait_until="networkidle")
+
+                await content_page.add_style_tag(
+                    content="""
+                    .page {
+                        display: none !important;
+                    }
+
+                    .report-body {
+                        display: block !important;
+                    }
+
+                    html,
+                    body {
+                        margin: 0 !important;
+                        padding: 0 !important;
+                        width: 210mm !important;
+                        min-width: 210mm !important;
+                        max-width: 210mm !important;
+                    }
+
+                    .report-body {
+                        width: 210mm !important;
+                        padding-top: 4mm;
+                        margin: 0 !important;
+                    }
+
+                    .report-section {
+                        width: 210mm !important;
+                        margin: 0 !important;
+                    }
+
+                    .c-section {
+                        break-inside: auto !important;
+                        page-break-inside: auto !important;
+                    }
+                    """
+                )
+
+                content_pdf_bytes = await content_page.pdf(
+                    width="210mm",
+                    height="297mm",
                     print_background=True,
                     display_header_footer=True,
                     header_template=HEADER_TEMPLATE,
-                    footer_template=self.FOOTER_TEMPLATE,
+                    footer_template=FOOTER_TEMPLATE,
                     margin={
-                        "top": self.CONTENT_MARGIN_TOP,
-                        "bottom": self.CONTENT_MARGIN_BOTTOM,
-                        "left": self.CONTENT_MARGIN_SIDE,
-                        "right": self.CONTENT_MARGIN_SIDE,
+                        "top": "14mm",
+                        "bottom": "14mm",
+                        "left": "0mm",
+                        "right": "0mm",
                     },
                 )
+
             finally:
-                await browser.close()
+                await title_page.close()
+                await content_page.close()
 
         # --- merge title + content into the final report, in memory ---
         writer = PdfWriter()

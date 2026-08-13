@@ -19,27 +19,34 @@
             padding: 0;
             -webkit-print-color-adjust: exact;
             print-color-adjust: exact;
+            color-adjust: exact;
         }
 
         body {
+            size: A4 portrait;
             background-color: #162338;
             display: flex;
             flex-direction: column;
             justify-content: flex-start;
             align-items: center;
             min-height: 100vh;
+            margin: 0;
             padding: 40px 20px;
             font-family: 'DM Sans', sans-serif;
         }
 
         .page {
             width: 210mm;
-            min-height: 297mm;
+            height: 297mm;
+            margin: 0 auto;
             background-color: #162338;
-            border: 2px solid beige;
-            border-radius: 2px;
+            border: none;
+            border-radius: 0;
             position: relative;
             overflow: hidden;
+            box-sizing: border-box;
+            page-break-after: always;
+            break-after: page;
             box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
         }
 
@@ -79,7 +86,7 @@
 
         .block-image {
             position: absolute;
-            top: 300px;
+            top: 350px;
             left: 300px;
             width: 100%;
             height: 100%;
@@ -185,6 +192,29 @@
             text-transform: uppercase;
         }
 
+        /* Deterministic (Python-calculated, not AI-guessed) count of actual
+           listings that matched the buyer's filters -- see property_match_count
+           in report_generation.py. Sits under the "Suburb Report" label. */
+        .text-match-count {
+            position: absolute;
+            bottom: 46mm;
+            right: 12mm;
+            width: 90mm;
+            text-align: right;
+            font-size: 7.5pt;
+            font-weight: 500;
+            letter-spacing: 0.04em;
+            z-index: 10;
+        }
+
+        .text-match-count-found {
+            color: rgba(215, 179, 94, 0.85);
+        }
+
+        .text-match-count-none {
+            color: rgba(255, 255, 255, 0.55);
+        }
+
 
         .stats-row {
             position: absolute;
@@ -251,21 +281,61 @@
 
         @media print {
             body {
-                background: none;
-                padding: 0;
-                margin: 0;
+                background-color: #162338 !important;
+                padding: 0 !important;
+                margin: 0 !important;
+                display: block !important;
+                width: 210mm !important;
             }
 
             .page {
-                width: 210mm;
-                min-height: 297mm;
-                border: none;
-                box-shadow: none;
-                border-radius: 0;
-                page-break-after: always;
+                width: 210mm !important;
+                height: 297mm !important;
+                min-height: 297mm !important;
+                max-height: 297mm !important;
+
+                margin: 0 !important;
+                padding: 0 !important;
+
+                border: none !important;
+                border-radius: 0 !important;
+                box-shadow: none !important;
+
+                overflow: hidden !important;
+
+                page-break-after: always !important;
+                break-after: page !important;
             }
 
-            .c-section,
+            .report-section {
+                overflow: visible !important;
+            }
+
+            .c-heading,
+            .c-subheading {
+                break-after: avoid;
+                page-break-after: avoid;
+            }
+
+            .c-body {
+                orphans: 3;
+                widows: 3;
+            }
+
+            /* IMPORTANT: only put ATOMIC, bounded-size elements in this list —
+               a single card/row/item that will always be short, regardless of
+               what the AI model fills it with. Never put a *container* here
+               (a grid/list/group whose child count comes from Gemini output),
+               because if that container ends up taller than one printable
+               page, "avoid" has no legal page to place it on and Chromium
+               just lets it run through the page boundary — which is what
+               was causing content to render underneath the header/footer
+               bands. Containers with a variable number of AI-generated
+               children (schools, amenities, strengths/considerations,
+               comparable suburbs, infrastructure entries) are intentionally
+               NOT listed here; only their individual child cards are, so a
+               long list breaks cleanly between cards instead of overlapping
+               the header/footer. */
             .c-snapshot-row,
             .c-snapshot-summary,
             .c-stat-row,
@@ -275,7 +345,6 @@
             .c-two-col,
             .c-metric-block,
             .c-chart-wrap,
-            .c-demo-grid,
             .c-demo-card,
             .c-hbar-group,
             .c-hbar-row,
@@ -287,37 +356,55 @@
             .c-budget-pill,
             .c-snapshot-stats,
             .c-snap-stat,
-            .c-growth-metrics,
             .c-growth-metric,
             .c-growth-badge,
-            .c-infra-content,
-            .c-infra-list,
             .c-infra-item,
+            .c-infra-content,
             .c-infra-meta,
             .c-verdict-gauge,
-            .c-verdict-breakdown,
-            .c-verdict-score-row,
-            .c-verdict-proscons,
             .c-match-score-wrap,
             .c-demo-ring,
-            .c-amenity-grid,
-            .c-comparable-row,
             .c-daylife-item,
             .c-growth-hero,
             .c-pending-banner,
             .c-risk-item,
-            .c-school-grid,
+            .c-school-card,
             .c-school-meta,
             .c-school-score-wrap,
-            .c-score-trio {
+            .c-score-trio,
+            .c-amenity-card,
+            .c-pro-item,
+            .c-con-item,
+            .c-comparable-pill {
                 break-inside: avoid;
                 page-break-inside: avoid;
+            }
+
+            /* These were previously marked break-inside:avoid as whole
+               containers. Their child count is set by the AI-generated
+               data, so they can legitimately grow taller than one page.
+               Explicitly un-avoid them (their children above are already
+               protected individually) so Chromium is free to paginate
+               between children instead of forcing the whole block onto
+               one page and overflowing past the margin when it can't. */
+            .c-school-grid,
+            .c-verdict-proscons,
+            .c-amenity-grid,
+            .c-comparable-row,
+            .c-infra-list,
+            .c-verdict-breakdown,
+            .c-verdict-score-row,
+            .c-demo-grid {
+                break-inside: auto;
+                page-break-inside: auto;
             }
         }
 
 
         .report-body {
             width: 210mm;
+            height: auto !important;
+            min-height: 0 !important;
             background-color: #ffffff;
             padding-top: 4mm;
         }
@@ -325,7 +412,7 @@
         .report-section {
             width: 210mm;
             padding: 0 12mm;
-            background-color: #ffffff;
+            background-color: #ffffffa1;
         }
 
 
@@ -334,6 +421,8 @@
 
         .c-section {
             margin-bottom: 3mm;
+            break-inside: auto !important;
+            page-break-inside: auto !important;
         }
 
         .c-section-wide {
@@ -375,13 +464,13 @@
             font-weight: 400;
             color: #2c2c2c;
             line-height: 1.75;
-            margin-bottom: 4mm;
+            margin-bottom: 3mm;
         }
 
         .c-divider {
             height: 1px;
             background: linear-gradient(90deg, rgba(215, 179, 94, 0.4), transparent);
-            margin: 2mm 0;
+            margin: 1.5mm 0;
         }
 
 
@@ -389,7 +478,7 @@
             display: grid;
             grid-template-columns: repeat(4, 1fr);
             gap: 4mm;
-            margin: 5mm 0;
+            margin: 5mm 0 20mm;
         }
 
         .c-stat-card {
@@ -569,6 +658,32 @@
             line-height: 1.4;
         }
 
+        .c-owner-renter-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 3mm;
+            margin-top: 3mm;
+        }
+
+        .c-owner-renter-stat {
+            text-align: center;
+            background-color: rgba(22, 35, 56, 0.03);
+            border-top: 2px solid #162338;
+            padding: 4mm 2mm;
+        }
+
+        .c-owner-renter-stat-gold {
+            border-top-color: #d7b35e;
+        }
+
+        .c-owner-renter-value {
+            font-family: 'Playfair Display', serif;
+            font-size: 20pt;
+            font-weight: 700;
+            color: #162338;
+            margin-bottom: 1.5mm;
+        }
+
 
         .c-hbar-group {
             display: flex;
@@ -640,7 +755,7 @@
         .c-snapshot-stats {
             flex: 1;
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 3mm;
         }
 
@@ -738,6 +853,13 @@
             margin-top: 3mm;
         }
 
+        .c-budget-stats-plain {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 3mm;
+            margin-top: 3mm;
+        }
+
         .c-budget-donut {
             width: 70px;
             flex-shrink: 0;
@@ -821,7 +943,7 @@
             flex-direction: column;
             justify-content: center;
             align-items: center;
-            min-width: 36mm;
+            width: 80mm;
             flex-shrink: 0;
             text-align: center;
         }
@@ -1026,6 +1148,30 @@
             height: 60px;
             margin: 0 auto 2mm;
             display: block;
+        }
+
+        .c-score-plain {
+            text-align: center;
+            background-color: rgba(22, 35, 56, 0.03);
+            border-top: 2px solid #d7b35e;
+            padding: 5mm 2mm 4mm;
+        }
+
+        .c-score-plain-value {
+            font-family: 'Playfair Display', serif;
+            font-size: 22pt;
+            font-weight: 700;
+            color: #162338;
+            line-height: 1;
+            margin-bottom: 2mm;
+        }
+
+        .c-score-plain-value span {
+            font-family: 'DM Sans', sans-serif;
+            font-size: 8pt;
+            font-weight: 400;
+            color: rgba(22, 35, 56, 0.4);
+            margin-left: 1mm;
         }
 
         .c-score-label {
@@ -1522,14 +1668,20 @@
             color: #d7b35e;
         }
 
-        /* @page margin is 0 here because this stylesheet is also used for the
-           title page (rendered full-bleed, 0 margin). The content pages are
-           rendered in a SEPARATE Playwright page.pdf() call that sets its own
-           margin (reserving room for the repeating header/footer band) --
-           see render_report.py. */
+        /* IMPORTANT: no `margin` is set here on purpose. This stylesheet is
+           shared by BOTH page.pdf() calls in services.py (title page +
+           content pages), and Chromium's own margin box for header_template/
+           footer_template is computed from the `margin` option passed to
+           page.pdf(), not from this stylesheet. Setting `@page { margin: 0 }`
+           here fights with that JS-level margin at every internal page
+           break in the content PDF -- confirmed by testing -- causing the
+           reserved top/bottom band to collapse and the first item on each
+           new page to render partly underneath the header/footer. The title
+           page still renders full-bleed correctly because its page.pdf()
+           call passes margin: 0mm on all sides directly; it doesn't need
+           help from this rule. Leave this margin-free. */
         @page {
             size: A4 portrait;
-            margin: 0;
         }
 
         @media print {
@@ -1575,6 +1727,20 @@
                render_report.py), not by anything in this stylesheet. */
             .report-section {
                 overflow: visible !important;
+            }
+
+            /* Stop a heading from being stranded as the last line on a page
+               with its content pushed to the next one, and stop a paragraph
+               leaving a single orphan/widow line dangling at a page edge. */
+            .c-heading,
+            .c-subheading {
+                break-after: avoid;
+                page-break-after: avoid;
+            }
+
+            .c-body {
+                orphans: 3;
+                widows: 3;
             }
         }
     </style>
@@ -1680,6 +1846,31 @@
     </div>
     {% endmacro %}
 
+    {# ============================================================
+    DATA-AVAILABILITY FALLBACK
+    ------------------------------------------------------------
+    Every major section object in the JSON Gemini returns can carry two
+    optional keys: "data_available" (bool, defaults to true if omitted)
+    and "unavailable_reason" (string). Gemini is instructed in the prompt
+    (see report_generation.py) to set data_available=false rather than
+    invent numbers when it has nothing real to ground a section in.
+    This macro renders that as a visible, honest banner instead of the
+    section silently going blank or showing a plausible-looking guess.
+    Call it right under a section's heading, before its body/stats.
+    ============================================================ #}
+    {% macro data_notice(section, fallback_label='This section') %}
+    {% if section is mapping and section.get('data_available') == false %}
+    <div class="c-pending-banner">
+        <span class="c-pending-icon">⚠️</span>
+        <span class="c-pending-text">
+            {{ section.get('unavailable_reason') or (fallback_label ~
+            " isn't available for this suburb from our current data sources. Get in touch with your SmartPropGuide
+            advisor for a manual assessment of this area.") }}
+        </span>
+    </div>
+    {% endif %}
+    {% endmacro %}
+
     <div class="page">
         <img class="logo" src="LOGO.svg" alt="Logo" />
 
@@ -1698,6 +1889,17 @@
             <span class="text-label-line"></span>
             <span class="text-label">Suburb Report</span>
         </div>
+
+        {% if property_match_count is defined %}
+        <div
+            class="text-match-count {{ 'text-match-count-found' if property_match_count > 0 else 'text-match-count-none' }}">
+            {% if property_match_count > 0 %}
+            {{ property_match_count }} matching propert{{ 'y' if property_match_count == 1 else 'ies' }} found
+            {% else %}
+            0 properties matched — suburb-level estimates shown
+            {% endif %}
+        </div>
+        {% endif %}
 
         <div class="stats-row">
             <div class="stat-box">
@@ -1732,6 +1934,18 @@
                     <div class="c-heading-line"></div>
                 </div>
 
+                {{ data_notice(snapshot, 'Suburb snapshot data') }}
+
+                {% if property_match_count is defined and property_match_count == 0 %}
+                <div class="c-pending-banner">
+                    <span class="c-pending-icon">⚠️</span>
+                    <span class="c-pending-text">No individual listings matched your exact suburb, budget, and
+                        property-type filters. The figures below are suburb-level medians and estimates rather than
+                        results drawn from specific properties currently on the market — speak with your
+                        SmartPropGuide advisor to widen the search or get notified when a match appears.</span>
+                </div>
+                {% endif %}
+
                 <div class="c-snapshot-row">
                     <div class="c-match-score-wrap">
                         {{ progress_ring(snapshot.match_score, label='MATCH SCORE') }}
@@ -1757,6 +1971,7 @@
                     <h2 class="c-heading">Can I Afford It?</h2>
                     <div class="c-heading-line"></div>
                 </div>
+                {{ data_notice(affordability, 'Affordability data') }}
                 <p class="c-body">{{ affordability.summary }}</p>
 
                 <div class="c-stat-row">
@@ -1780,6 +1995,7 @@
                     <h2 class="c-heading">Rental &amp; Exit Value</h2>
                     <div class="c-heading-line"></div>
                 </div>
+                {{ data_notice(rental, 'Rental yield data') }}
                 <p class="c-body">{{ rental.summary }}</p>
 
                 <div class="c-two-col">
@@ -1803,20 +2019,16 @@
                     <h2 class="c-heading">What Does My Budget Buy?</h2>
                     <div class="c-heading-line"></div>
                 </div>
+                {{ data_notice(budget, 'Budget breakdown data') }}
                 <p class="c-body">{{ budget.summary }}</p>
 
-                <div class="c-budget-row">
-                    <div class="c-budget-donut">
-                        {{ donut(budget.units_percent, 'Units') }}
+                <div class="c-budget-stats-plain">
+                    {% for p in budget.pills %}
+                    <div class="c-snap-stat{{ ' c-snap-stat-gold' if p.style == 'gold' else '' }}">
+                        <div class="c-snap-stat-value">{{ p.value }}</div>
+                        <div class="c-snap-stat-label">{{ p.label }}</div>
                     </div>
-                    <div class="c-budget-stats">
-                        {% for p in budget.pills %}
-                        <div class="c-budget-pill c-budget-pill-{{ p.style }}">
-                            <span class="c-budget-pill-val">{{ p.value }}</span>
-                            <span class="c-budget-pill-label">{{ p.label }}</span>
-                        </div>
-                        {% endfor %}
-                    </div>
+                    {% endfor %}
                 </div>
             </div>
         </div>
@@ -1828,6 +2040,7 @@
                     <h2 class="c-heading">Will It Grow?</h2>
                     <div class="c-heading-line"></div>
                 </div>
+                {{ data_notice(growth, 'Growth outlook data') }}
                 <p class="c-body">{{ growth.summary }}</p>
 
                 <div class="c-growth-hero">
@@ -1856,6 +2069,7 @@
                     <h2 class="c-heading">Nearby Infrastructure</h2>
                     <div class="c-heading-line"></div>
                 </div>
+                {{ data_notice(infrastructure, 'Infrastructure pipeline data') }}
                 <p class="c-body">{{ infrastructure.summary }}</p>
 
                 <div class="c-infra-list">
@@ -1885,6 +2099,8 @@
                     <h2 class="c-heading">Price History</h2>
                     <div class="c-heading-line"></div>
                 </div>
+
+                {{ data_notice(price_history, 'Price history data') }}
 
                 {% set values = price_history.points | map(attribute='value') | list %}
                 {% set max_v = values | max %}
@@ -1937,13 +2153,13 @@
                     <h2 class="c-heading">Lifestyle &amp; Amenities</h2>
                     <div class="c-heading-line"></div>
                 </div>
+                {{ data_notice(lifestyle, 'Lifestyle score data') }}
                 <p class="c-body">{{ lifestyle.summary }}</p>
 
                 <div class="c-score-trio">
                     {% for score in lifestyle.scores %}
-                    <div class="c-score-badge">
-                        {{ progress_ring(score.value, radius=28, size=70, stroke=7, fill_color=score.color, sub='/ 100',
-                        value_size=16, sub_size=6) }}
+                    <div class="c-score-plain">
+                        <div class="c-score-plain-value">{{ score.value }}<span>/100</span></div>
                         <div class="c-score-label">{{ score.label }}</div>
                         <div class="c-score-sublabel">{{ score.sublabel }}</div>
                     </div>
@@ -1994,6 +2210,7 @@
                     <h2 class="c-heading">Community Profile</h2>
                     <div class="c-heading-line"></div>
                 </div>
+                {{ data_notice(community, 'Community demographic data') }}
                 <p class="c-body">{{ community.summary }}</p>
 
                 <div class="c-stat-row">
@@ -2024,10 +2241,11 @@
                         <div class="c-section-header">
                             <h3 class="c-subheading">Owner vs. Renter</h3>
                         </div>
-                        <div class="c-demo-grid" style="grid-template-columns: 1fr 1fr; margin-top: 3mm">
+                        <div class="c-owner-renter-row">
                             {% for o in community.owner_vs_renter %}
-                            <div class="c-demo-card">
-                                {{ small_ring(o.value, o.label, o.color) }}
+                            <div class="c-owner-renter-stat{{ ' c-owner-renter-stat-gold' if loop.last else '' }}">
+                                <div class="c-owner-renter-value">{{ o.value }}%</div>
+                                <div class="c-demo-card-label">{{ o.label }}</div>
                             </div>
                             {% endfor %}
                         </div>
@@ -2059,6 +2277,8 @@
                     <h2 class="c-heading">Schools &amp; Family Fit</h2>
                     <div class="c-heading-line"></div>
                 </div>
+
+                {{ data_notice(schools, 'School catchment and family-fit data') }}
 
                 {% if schools.pending_notice %}
                 <div class="c-pending-banner">
@@ -2115,6 +2335,7 @@
                     <h2 class="c-heading">Risk &amp; Planning</h2>
                     <div class="c-heading-line"></div>
                 </div>
+                {{ data_notice(risk, 'Risk assessment data') }}
                 <p class="c-body">{{ risk.summary }}</p>
             </div>
 
@@ -2145,6 +2366,7 @@
                     <h2 class="c-heading">The Verdict</h2>
                     <div class="c-heading-line"></div>
                 </div>
+                {{ data_notice(verdict, 'Overall verdict data') }}
             </div>
 
             <div class="c-verdict-score-row">
@@ -2189,7 +2411,7 @@
 
             <div class="c-divider"></div>
 
-            <div class="c-section">
+            <div class="c-section" style="margin-bottom: 20mm">
                 <div class="c-section-header">
                     <h3 class="c-subheading">You Might Also Consider</h3>
                 </div>
