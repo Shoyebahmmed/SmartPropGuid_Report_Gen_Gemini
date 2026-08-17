@@ -14,7 +14,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1fstreamlit/proto/AutoRerun.proto\"2\n\tAutoRerun\x12\x10\n\x08interval\x18\x01 \x01(\x02\x12\x13\n\x0b\x66ragment_id\x18\x02 \x01(\tb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1fstreamlit/proto/AutoRerun.proto\"2\n\tAutoRerun\x12\x10\n\x08interval\x18\x01 \x01(\x02\x12\x13\n\x0b\x66ragment_id\x18\x02 \x01(\t\"%\n\rStopAutoRerun\x12\x14\n\x0c\x66ragment_ids\x18\x01 \x03(\tb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -23,4 +23,6 @@ if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_AUTORERUN']._serialized_start=35
   _globals['_AUTORERUN']._serialized_end=85
+  _globals['_STOPAUTORERUN']._serialized_start=87
+  _globals['_STOPAUTORERUN']._serialized_end=124
 # @@protoc_insertion_point(module_scope)

@@ -65,17 +65,20 @@ class GapConfig(_message.Message):
     DESCRIPTOR: _descriptor.Descriptor
 
     GAP_SIZE_FIELD_NUMBER: _builtins.int
+    PIXEL_GAP_FIELD_NUMBER: _builtins.int
     gap_size: Global___GapSize.ValueType
+    pixel_gap: _builtins.int
     def __init__(
         self,
         *,
         gap_size: Global___GapSize.ValueType = ...,
+        pixel_gap: _builtins.int = ...,
     ) -> None: ...
-    _HasFieldArgType: _TypeAlias = _typing.Literal["gap_size", b"gap_size", "gap_spec", b"gap_spec"]  # noqa: Y015
+    _HasFieldArgType: _TypeAlias = _typing.Literal["gap_size", b"gap_size", "gap_spec", b"gap_spec", "pixel_gap", b"pixel_gap"]  # noqa: Y015
     def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
-    _ClearFieldArgType: _TypeAlias = _typing.Literal["gap_size", b"gap_size", "gap_spec", b"gap_spec"]  # noqa: Y015
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["gap_size", b"gap_size", "gap_spec", b"gap_spec", "pixel_gap", b"pixel_gap"]  # noqa: Y015
     def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
-    _WhichOneofReturnType_gap_spec: _TypeAlias = _typing.Literal["gap_size"]  # noqa: Y015
+    _WhichOneofReturnType_gap_spec: _TypeAlias = _typing.Literal["gap_size", "pixel_gap"]  # noqa: Y015
     _WhichOneofArgType_gap_spec: _TypeAlias = _typing.Literal["gap_spec", b"gap_spec"]  # noqa: Y015
     def WhichOneof(self, oneof_group: _WhichOneofArgType_gap_spec) -> _WhichOneofReturnType_gap_spec | None: ...
 

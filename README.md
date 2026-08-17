@@ -18,12 +18,12 @@ The platform handles the manual collection workflow in a streamlined 3-step pipe
 * Evaluates secondary priority weights using an interactive grid checklist mapping core environmental and lifestyle metrics (e.g., school boundaries, public transit access, proximity to the CBD, flood and bushfire risks).
 
 ### 📂 2. Data & Template Upload
-* **Source Data Integration**: Supports direct uploads of manual operator data compilations via CSV or Excel (`.xlsx`, `.xls`) listings.
+* **Source Data Integration**: Supports both direct manual file uploads (`.csv`, `.xlsx`, `.xls`) and real-time automated data pulling via the **HTAG Suburb Analysis API** (`https://agent.htagai.com/micro-agents/agents/suburb-analysis/execute`).
 * **Report Layout Pre-sets**: Injects customized HTML template files dynamically. Falls back automatically to the standard enterprise `sample_template.html` template when an alternative layout isn't loaded.
 * **Operational Control Layer**: Provides custom directive text fields for operators to tell the AI model exactly what to prioritize during generation (e.g., target capital growth trajectories or transit vectors).
 
 ### ✨ 3. AI Report Generation & Compilation
-* Leverages the `gemini-2.5-flash` model to analyze historical and current listings against customer inputs.
+* Leverages dual AI engine support: choose between **Google Gemini (`gemini-2.5-flash`)** and **Anthropic Claude (`claude-sonnet-4-6`)** via an interactive selector.
 * Dynamically parses textual data streams, processes structured listings rows, maps scores, and handles real-time HTML string rendering.
 * Seamlessly compiles raw HTML code into professional, portable documents using `playwright` for local download.
 
@@ -37,25 +37,29 @@ The project has been refactored into a modular Object-Oriented design:
 SmartPropGuid_Report_Gen_Gemini/
 ├── app.py                      # Main entrypoint & coordinator
 ├── sample_template.html        # Default report template
+├── Cred.env                    # API Keys & Model Configuration
 ├── requirements.txt            # Package dependencies
 └── components/                 # Application components and services package
     ├── __init__.py             # Package initializer
     ├── config.py               # AppConfig & SessionState class wrappers
     ├── ui_utils.py             # UI elements helper & CSS styles injection
-    ├── services.py             # ExcelService, DataService, GeminiService, and PdfService
+    ├── services.py             # ExcelService, DataService, GeminiService, AnthropicService, HtagService, TemplateService, PdfService
     ├── form.py                 # Customer Preferences form component UI
-    ├── data_selection.py       # Data preview and template uploader component UI
+    ├── data_selection.py       # Data preview, HTAG API fetcher, and template uploader component UI
     └── report_generation.py    # AI report generator and PDF download component UI
 ```
 
 Each module has a single responsibility:
 - **`App`**: Sets up page properties, custom styling, and routes the navigation tabs to components.
-- **`AppConfig`**: Resolves local resources paths, sets environment setups, and initializes the Generative Model.
+- **`AppConfig`**: Resolves local resources paths, sets environment setups, and loads API keys for Gemini, Anthropic, and HTAG.
 - **`SessionState`**: Encapsulates properties in Streamlit state parameters.
 - **`UiHelper`**: Separates loading spinner animations and injecting dark/light theme CSS properties.
 - **`ExcelService`**: Appends customer intake sheet submissions safely.
 - **`DataService`**: Manages filtering operations and autoloads postcode datasets.
-- **`GeminiService`**: Interacts with the AI model for generation.
+- **`GeminiService`**: Interacts with Google Gemini AI for structured JSON report generation.
+- **`AnthropicService`**: Interacts with Anthropic Claude for structured JSON report generation.
+- **`HtagService`**: Connects to the HTAG Micro-Agent Suburb Analysis API to fetch live real estate metrics.
+- **`TemplateService`**: Jinja2 rendering engine that safely merges JSON report content into HTML templates.
 - **`PdfService`**: Executes a headless browser process to print the HTML report as a high-fidelity PDF.
 
 ---

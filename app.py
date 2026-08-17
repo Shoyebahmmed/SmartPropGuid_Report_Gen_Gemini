@@ -1,6 +1,14 @@
 import streamlit as st
 from components.config import AppConfig, SessionState
-from components.services import ExcelService, DataService, GeminiService, PdfService, TemplateService
+from components.services import (
+    ExcelService,
+    DataService,
+    GeminiService,
+    AnthropicService,
+    HtagService,
+    PdfService,
+    TemplateService,
+)
 from components.form import FormComponent
 from components.data_selection import DataSelectionComponent
 from components.report_generation import ReportGenerationComponent
@@ -19,17 +27,25 @@ class App:
         self.excel_service = ExcelService(self.config)
         self.data_service = DataService(self.config)
         self.gemini_service = GeminiService(self.config)
+        self.anthropic_service = AnthropicService(self.config)
+        self.htag_service = HtagService(self.config)
         self.pdf_service = PdfService(self.config)
         self.template_service = TemplateService()
         
         # 3. Component Initializations
         self.form_component = FormComponent(self.session, self.excel_service)
-        self.data_selection_component = DataSelectionComponent(self.session, self.config)
+        self.data_selection_component = DataSelectionComponent(
+            self.session,
+            self.config,
+            self.htag_service
+        )
         self.report_generation_component = ReportGenerationComponent(
             self.session,
             self.config,
             self.data_service,
             self.gemini_service,
+            self.anthropic_service,
+            self.htag_service,
             self.pdf_service,
             self.template_service
         )

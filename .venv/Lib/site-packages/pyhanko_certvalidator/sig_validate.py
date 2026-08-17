@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import abc
 from dataclasses import dataclass
-from typing import Optional
 
 from asn1crypto import algos
 from asn1crypto.keys import PublicKeyInfo
@@ -28,6 +27,8 @@ from pyhanko_certvalidator.util import (
 )
 
 __all__ = [
+    'DEFAULT_SIGNATURE_VALIDATOR',
+    'DEFAULT_VALIDATION_CONTEXT',
     'DefaultSignatureValidator',
     'SignatureValidationContext',
     'SignatureValidator',
@@ -41,7 +42,7 @@ class SignatureValidationContext:
     executing the cryptographic validation process.
     """
 
-    contextual_md_algorithm: Optional[str] = None
+    contextual_md_algorithm: str | None = None
     """
     Digest algorithm inferred from context. Used when the digest
     algorithm cannot be derived from the ASN.1 data describing the
@@ -55,6 +56,9 @@ class SignatureValidationContext:
     """
 
 
+DEFAULT_VALIDATION_CONTEXT = SignatureValidationContext()
+
+
 class SignatureValidator(abc.ABC):
     """
     Abstracts away cryptographic validation primitives.
@@ -66,7 +70,7 @@ class SignatureValidator(abc.ABC):
         signed_data: bytes,
         public_key_info: PublicKeyInfo,
         signature_algorithm: algos.SignedDigestAlgorithm,
-        context: SignatureValidationContext = SignatureValidationContext(),
+        context: SignatureValidationContext = DEFAULT_VALIDATION_CONTEXT,
     ):
         """
         Validate a cryptographic signature over a piece of data.
@@ -95,7 +99,7 @@ class DefaultSignatureValidator(SignatureValidator):
         signed_data: bytes,
         public_key_info: PublicKeyInfo,
         signature_algorithm: algos.SignedDigestAlgorithm,
-        context: SignatureValidationContext = SignatureValidationContext(),
+        context: SignatureValidationContext = DEFAULT_VALIDATION_CONTEXT,
     ):
         _validate_raw(
             signature,
@@ -111,7 +115,7 @@ def _validate_raw(
     signed_data: bytes,
     public_key_info: PublicKeyInfo,
     signature_algorithm: algos.SignedDigestAlgorithm,
-    context: SignatureValidationContext = SignatureValidationContext(),
+    context: SignatureValidationContext = DEFAULT_VALIDATION_CONTEXT,
 ):
     """
     Validate a raw signature. Internal API.
@@ -192,3 +196,6 @@ def _validate_raw(
         raise AlgorithmNotSupported(
             f"Signature mechanism {sig_algo} is not supported."
         )
+
+
+DEFAULT_SIGNATURE_VALIDATOR = DefaultSignatureValidator()
