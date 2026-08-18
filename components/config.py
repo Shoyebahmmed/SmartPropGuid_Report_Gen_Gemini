@@ -16,20 +16,30 @@ class AppConfig:
         env_path = os.path.join(self.project_root, ".env")
 
         if os.path.exists(cred_path):
-            load_dotenv(cred_path)
-        else:
-            load_dotenv(env_path)
+            load_dotenv(cred_path, override=True)
+        elif os.path.exists(env_path):
+            load_dotenv(env_path, override=True)
 
-        # Initialize Gemini API
+        # Initialize Gemini API if key is present
         api_key = self.api_key
         if api_key:
             genai.configure(api_key=api_key)
-        else:
-            st.warning("⚠️ GEMINI_API_KEY not found in Cred.env or system environment. Please configure it to enable AI generation.")
 
     @property
     def api_key(self) -> str:
-        return os.environ.get("GEMINI_API_KEY")
+        return os.environ.get("GEMINI_API_KEY", "")
+
+    @property
+    def anthropic_api_key(self) -> str:
+        return os.environ.get("ANTHROPIC_API_KEY", "")
+
+    @property
+    def htag_api_key(self) -> str:
+        return os.environ.get("HTAG_API_KEY", "")
+
+    @property
+    def claude_model(self) -> str:
+        return os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
 
     def get_asset_path(self, filename: str) -> str:
         return os.path.join(self.project_root, filename)
@@ -49,6 +59,15 @@ class SessionState:
     def initialize_defaults(self):
         if "theme" not in st.session_state:
             st.session_state.theme = "dark"
+
+        if "ai_provider" not in st.session_state:
+            st.session_state.ai_provider = "Google Gemini"
+
+        if "data_source_mode" not in st.session_state:
+            st.session_state.data_source_mode = "📁 Upload Data File (CSV / Excel)"
+
+        if "htag_data" not in st.session_state:
+            st.session_state.htag_data = None
 
         if "generated_report_html" not in st.session_state:
             st.session_state.generated_report_html = None
@@ -79,6 +98,30 @@ class SessionState:
 
     def toggle_theme(self):
         self.theme = "light" if self.theme == "dark" else "dark"
+
+    @property
+    def ai_provider(self) -> str:
+        return st.session_state.get("ai_provider", "Google Gemini")
+
+    @ai_provider.setter
+    def ai_provider(self, value: str):
+        st.session_state.ai_provider = value
+
+    @property
+    def data_source_mode(self) -> str:
+        return st.session_state.get("data_source_mode", "📁 Upload Data File (CSV / Excel)")
+
+    @data_source_mode.setter
+    def data_source_mode(self, value: str):
+        st.session_state.data_source_mode = value
+
+    @property
+    def htag_data(self):
+        return st.session_state.get("htag_data")
+
+    @htag_data.setter
+    def htag_data(self, value):
+        st.session_state.htag_data = value
 
     @property
     def generated_report_html(self):

@@ -3,17 +3,20 @@ import json
 import re
 import streamlit as st
 from components.config import SessionState, AppConfig
-from components.services import DataService, GeminiService, PdfService, TemplateService
+from components.services import DataService, GeminiService, AnthropicService, HtagService, PdfService, TemplateService
 from components.ui_utils import UiHelper
 
 class ReportGenerationComponent:
     def __init__(self, session: SessionState, config: AppConfig, 
                  data_service: DataService, gemini_service: GeminiService, 
+                 anthropic_service: AnthropicService, htag_service: HtagService,
                  pdf_service: PdfService, template_service: TemplateService):
         self.session = session
         self.config = config
         self.data_service = data_service
         self.gemini_service = gemini_service
+        self.anthropic_service = anthropic_service
+        self.htag_service = htag_service
         self.pdf_service = pdf_service
         self.template_service = template_service
         
@@ -34,11 +37,6 @@ class ReportGenerationComponent:
     def render(self, custom_prompt: str):
         st.markdown("### Generate and Review Report")
         
-        # Verify API key
-        if not self.config.api_key:
-            st.error("❌ Cannot generate report: Gemini API key is missing. Please add it to your Cred.env file.")
-            return
-
         # Fetch form values from session state
         suburb = st.session_state.get("suburb", "")
         property_type = st.session_state.get("property_type", "House")
@@ -49,6 +47,26 @@ class ReportGenerationComponent:
         for i, priority in enumerate(self.priorities_list):
             if st.session_state.get(f"priority_{i}"):
                 selected_priorities.append(priority)
+
+        # AI Provider Selection Card
+        st.markdown('<div class="zinc-card">', unsafe_allow_html=True)
+        prov_col1, prov_col2 = st.columns([2, 1])
+        
+        with prov_col1:
+            st.markdown("<h4>AI Engine & Generation Settings</h4>", unsafe_allow_html=True)
+            provider_choice = st.radio(
+                "Select Generative AI Model Provider:",
+                options=["Google Gemini (gemini-2.5-flash)", f"Anthropic Claude ({self.config.claude_model})"],
+                index=0 if "Gemini" in self.session.ai_provider else 1,
+                horizontal=True,
+                key="ai_provider_radio"
+            )
+            self.session.ai_provider = "Google Gemini" if "Gemini" in provider_choice else "Anthropic Claude"
+            
+        with prov_col2:
+            st.markdown("<h4>Active Data Source</h4>", unsafe_allow_html=True)
+            st.info(f"Using: **{self.session.data_source_mode}**")
+        st.markdown('</div>', unsafe_allow_html=True)
 
         # UI Layout: Settings Summary Card & Generation Button
         bg_subtle = "#0c0c0f" if self.session.theme == "dark" else "#f9fafb"
@@ -62,6 +80,7 @@ class ReportGenerationComponent:
                 <strong>Property Type:</strong> {property_type} | 
                 <strong>Budget:</strong> {budget} | 
                 <strong>Purpose:</strong> {intention} | 
+                <strong>AI Model:</strong> {self.session.ai_provider}<br>
                 <strong>Key Preferences Selected:</strong> {', '.join(selected_priorities) if selected_priorities else "None"}
             </div>
             """, unsafe_allow_html=True)
@@ -70,126 +89,181 @@ class ReportGenerationComponent:
             generate_btn = st.button("✨ Generate AI Report", type="primary", use_container_width=True)
 
         if generate_btn:
-            # Extract postcode from suburb
+            # Check API keys before execution
+            is_anthropic = "Anthropic" in self.session.ai_provider
+            if is_anthropic and not self.config.anthropic_api_key:
+                st.error("❌ Cannot generate report: ANTHROPIC_API_KEY is missing. Please add it to your Cred.env file.")
+                return
+            elif not is_anthropic and not self.config.api_key:
+                st.error("❌ Cannot generate report: GEMINI_API_KEY is missing. Please add it to your Cred.env file.")
+                return
+
+            # Extract postcode & state from suburb string
             postcode_str = ""
+            state_str = ""
+            suburb_clean = suburb
             if suburb:
                 pm = re.search(r"\b\d{3,4}\b", suburb.strip())
                 postcode_str = pm.group(0) if pm else ""
+                
+                sm = re.search(r"\b(VIC|NSW|QLD|WA|SA|TAS|ACT|NT)\b", suburb.strip(), re.IGNORECASE)
+                state_str = sm.group(0).upper() if sm else ""
+                
+                if postcode_str:
+                    suburb_clean = suburb_clean.replace(postcode_str, "")
+                if state_str:
+                    suburb_clean = re.sub(rf"\b{state_str}\b", "", suburb_clean, flags=re.IGNORECASE)
+                suburb_clean = re.sub(r"[,\-\s]+", " ", suburb_clean).strip()
 
-            # Check for active dataset in session
-            df_active = self.session.df_data
+            loader_placeholder = UiHelper.start_loader(f"{self.session.ai_provider} is analyzing suburb data and composing report...", self.session.theme)
             
-            # Auto-load if active is None and postcode is available
-            if df_active is None and postcode_str:
-                try:
-                    df_loaded, filename = self.data_service.auto_load_postcode_dataset(postcode_str)
-                    if df_loaded is not None:
-                        df_active = df_loaded
-                        self.session.df_data = df_loaded
-                        st.info(f"ℹ️ Automatically loaded postcode dataset: `{filename}`")
-                except Exception as e:
-                    st.warning(f"⚠️ Could not auto-load postcode dataset: {e}")
-
-            # Filter property listings data
-            df_filtered = None
-            if df_active is not None:
-                df_filtered = self.data_service.filter_property_data(
-                    df_active, 
-                    postcode_str, 
-                    budget, 
-                    property_type
-                )
-
-            # Prepare listings data context (as structured data, not HTML)
-            data_context = ""
-            listings_records = []
-            if df_filtered is not None and len(df_filtered) > 0:
-                data_context = f"Manual Listings Data Compiled (Filtered for Postcode {postcode_str}):\n{df_filtered.to_string(index=False)}"
-                for _, r in df_filtered.iterrows():
-                    listings_records.append({
-                        "address": r.get('Address') or r.get('Property address') or '',
-                        "price": r.get('Purchase price') or r.get('Price') or '',
-                    })
-            else:
-                st.warning("No matching listings data found. Report will be generated without property rows.")
-                data_context = "No listing data uploaded or matching the criteria."
-
-            # Assemble prompt asking Gemini for STRUCTURED JSON ONLY.
-            # Gemini never sees or touches the HTML template -- it only
-            # returns content, which TemplateService merges into
-            # sample_template.html via Jinja2. This is the key change from
-            # the old approach (which had Gemini re-emit the entire HTML
-            # document from scratch and was the source of the layout/CSS
-            # corruption bugs).
-            full_prompt = f"""
-            You are a professional property investment analyst assistant.
-            Generate the CONTENT for a suburb property report as a single JSON object.
-            Do not include any HTML markup -- plain text/numbers/lists only.
-
-            --- INPUTS ---
-            1. Property Type Preference: {property_type}
-            2. Target Suburb/Area: {suburb}
-            3. Budget: {budget}
-            4. Purchase Intention: {intention}
-            5. Key Client Priorities: {', '.join(selected_priorities) if selected_priorities else "General property advice"}
-            6. Pre-Sales Operator Instructions: {custom_prompt}
-            7. Report Date: {datetime.date.today().strftime("%B %d, %Y")}
-
-            8. Source Data:
-            {data_context}
-
-            --- REQUIRED JSON SCHEMA ---
-            Return a single JSON object with EXACTLY these top-level keys:
-            "median_price" (string), "clearance_rate" (string), "days_on_market" (string),
-            "snapshot" (object: match_score int, stats list of {{value, label, highlight (boolean true or false)}}, summary string)
-            "affordability" (object: summary string, stats list of {{value,label}}, trends list of {{label,value,direction: up|down|neutral}}),
-            "rental" (object: summary string, metrics list of {{label,value,bar_percent 0-100}}),
-            "budget" (object: summary string, units_percent int 0-100, pills list of {{value,label,style: gold|navy|outline}}),
-            "growth" (object: summary string, category string, metrics list of {{value,label,bar_percent 0-100}}),
-            "infrastructure" (object: summary string, entries list of {{year,title,tag_type: transport|amenity|community,tag_label,status_type: active|planned,status_label,value}}),
-            "price_history" (object: y_axis_labels list of 4 strings low-to-high, points list of ~7 {{year,value (numeric, in millions)}}, legend list of {{color,label}}),
-            "lifestyle" (object: summary string, scores list of {{value 0-100,label,sublabel,color}}),
-            "amenities" (list of {{icon (single emoji),count,label}}),
-            "day_in_life" (list of {{time,text}}),
-            "community" (object: summary string, stats list of {{value,label}}, age_distribution list of {{label,value 0-100,dark bool}}, owner_vs_renter list of exactly 2 {{value 0-100,label,color}}, household_composition list of {{label,value 0-100,dark bool}}, type_summary string),
-            "schools" (object: pending_notice string or empty, summary string, list of {{type,name,distance,score 0-100}}, family_fit list of {{label,value 0-100,dark bool}}, verdict string),
-            "risk" (object: summary string, entries list of {{level: low|medium|high,title,detail,badge}}, disclaimer string),
-            "verdict" (object: match_score int 0-100, subscores list of {{label,value 0-100,good bool}}, strengths list of strings, considerations list of strings, next_step string, comparable_suburbs list of {{name,postcode,price}}),
-            "listings" ({json.dumps(listings_records)} -- reformat/annotate these into a list of {{address,price,badge_score,availability}} if useful, else pass through).
-
-            Ground every figure and claim in the Source Data where available; where data is
-            genuinely unavailable, provide a clearly-labelled reasonable estimate rather than
-            inventing overly specific false precision.
-            """
-
-            # Display loader while generating
-            loader_placeholder = UiHelper.start_loader("AI is analyzing data and compiling report content…", self.session.theme)
             try:
-                # 1) Gemini returns structured JSON content only
-                report_data = self.gemini_service.generate_report_data(full_prompt)
+                data_context = ""
+                listings_records = []
 
-                # 2) Ensure any missing 'highlight' flag in snapshot stats defaults to False
+                # Branch by Data Source Mode
+                is_htag_mode = "HTAG" in self.session.data_source_mode
+                
+                if is_htag_mode:
+                    # Retrieve or fetch HTAG data
+                    htag_data = self.session.htag_data
+                    if not htag_data and suburb_clean:
+                        try:
+                            htag_data = self.htag_service.fetch_suburb_analysis(
+                                suburb=suburb_clean,
+                                state=state_str,
+                                postcode=postcode_str,
+                                property_type=property_type
+                            )
+                            self.session.htag_data = htag_data
+                        except Exception as htag_err:
+                            st.warning(f"⚠️ Could not auto-fetch HTAG API data: {htag_err}")
+
+                    if htag_data:
+                        metrics = htag_data.get("metrics", {})
+                        rcs = htag_data.get("rcs", {})
+                        growth = htag_data.get("growth_rates", {})
+                        demographics = htag_data.get("demographics", {})
+                        supply_demand = htag_data.get("supply_demand", {})
+                        research_text = htag_data.get("research_output", "")
+                        
+                        data_context = f"""
+                        === LIVE HTAG SUBURB INTELLIGENCE DATA ===
+                        Suburb: {suburb_clean} | State: {state_str} | Postcode: {postcode_str}
+                        Property Type Analysed: {property_type}
+                        Typical/Median Price: ${metrics.get('median_price', 'N/A')}
+                        Gross Rental Yield: {metrics.get('gross_yield', 'N/A')}
+                        Vacancy Rate: {metrics.get('vacancy_rate', 'N/A')}
+                        Days on Market: {metrics.get('days_on_market', 'N/A')}
+                        Cycle Stage: {htag_data.get('cycle_stage', 'N/A')} (Signal: {htag_data.get('cycle_signal', 'N/A')})
+                        RCS Overall Score: {rcs.get('overall', 'N/A')}/100 (Cashflow: {rcs.get('cashflow', 'N/A')}, Capital Growth: {rcs.get('capital_growth', 'N/A')}, Lower Risk: {rcs.get('lower_risk', 'N/A')})
+                        HAPI Score: {htag_data.get('hapi_score', 'N/A')}/10
+                        Growth Rates: 1Y={growth.get('1y', 'N/A')}, 3Y={growth.get('3y', 'N/A')}, 5Y={growth.get('5y', 'N/A')}
+                        Demographics: IRSAD Decile={demographics.get('irsad', 'N/A')}/10, Estimated Dwellings={demographics.get('estimated_dwellings', 'N/A')}
+                        Supply/Demand: Vacancy Rate={supply_demand.get('vacancy_rate', 'N/A')}, Rent-to-Own Ratio={supply_demand.get('rent_to_own_ratio', 'N/A')}
+                        
+                        --- HTAG AI RESEARCH REPORT OUTPUT ---
+                        {research_text}
+                        """
+                    else:
+                        data_context = "HTAG API data was requested but no data was returned."
+                else:
+                    # Upload File Mode (CSV / Excel)
+                    df_active = self.session.df_data
+                    if df_active is None and postcode_str:
+                        try:
+                            df_loaded, filename = self.data_service.auto_load_postcode_dataset(postcode_str)
+                            if df_loaded is not None:
+                                df_active = df_loaded
+                                self.session.df_data = df_loaded
+                                st.info(f"ℹ️ Automatically loaded postcode dataset: `{filename}`")
+                        except Exception as e:
+                            st.warning(f"⚠️ Could not auto-load postcode dataset: {e}")
+
+                    df_filtered = None
+                    if df_active is not None:
+                        df_filtered = self.data_service.filter_property_data(
+                            df_active, 
+                            postcode_str, 
+                            budget, 
+                            property_type
+                        )
+
+                    if df_filtered is not None and len(df_filtered) > 0:
+                        data_context = f"Manual Listings Data Compiled (Filtered for Postcode {postcode_str}):\n{df_filtered.to_string(index=False)}"
+                        for _, r in df_filtered.iterrows():
+                            listings_records.append({
+                                "address": r.get('Address') or r.get('Property address') or '',
+                                "price": r.get('Purchase price') or r.get('Price') or '',
+                            })
+                    else:
+                        data_context = "No listing data uploaded or matching the criteria."
+
+                # Assemble prompt asking AI for STRUCTURED JSON ONLY
+                full_prompt = f"""
+                You are an expert Australian property investment research analyst.
+                Generate the comprehensive CONTENT for a suburb property evaluation report as a single JSON object.
+                Do not include any HTML markup -- plain text/numbers/lists only.
+
+                --- CLIENT INPUTS & CRITERIA ---
+                1. Property Type: {property_type}
+                2. Target Suburb/Area: {suburb}
+                3. Budget Range: {budget}
+                4. Purchase Intention: {intention}
+                5. Key Client Priorities: {', '.join(selected_priorities) if selected_priorities else "General property investment and lifestyle evaluation"}
+                6. Pre-Sales Operator Instructions: {custom_prompt}
+                7. Report Date: {datetime.date.today().strftime("%B %d, %Y")}
+
+                --- SOURCE PROPERTY INTELLIGENCE DATA ---
+                {data_context}
+
+                --- REQUIRED JSON SCHEMA ---
+                Return a single JSON object with EXACTLY these top-level keys:
+                "median_price" (string formatted e.g. "$1,658,000"), "clearance_rate" (string e.g. "68%"), "days_on_market" (string e.g. "34 days"),
+                "snapshot" (object: match_score int, stats list of {{value, label, highlight (boolean true or false)}}, summary string)
+                "affordability" (object: summary string, stats list of {{value,label}}, trends list of {{label,value,direction: up|down|neutral}}),
+                "rental" (object: summary string, metrics list of {{label,value,bar_percent 0-100}}),
+                "budget" (object: summary string, units_percent int 0-100, pills list of {{value,label,style: gold|navy|outline}}),
+                "growth" (object: summary string, category string, metrics list of {{value,label,bar_percent 0-100}}),
+                "infrastructure" (object: summary string, entries list of {{year,title,tag_type: transport|amenity|community,tag_label,status_type: active|planned,status_label,value}}),
+                "price_history" (object: y_axis_labels list of 4 strings low-to-high, points list of ~7 {{year,value (numeric, in millions)}}, legend list of {{color,label}}),
+                "lifestyle" (object: summary string, scores list of {{value 0-100,label,sublabel,color}}),
+                "amenities" (list of {{icon (single emoji),count,label}}),
+                "day_in_life" (list of {{time,text}}),
+                "community" (object: summary string, stats list of {{value,label}}, age_distribution list of {{label,value 0-100,dark bool}}, owner_vs_renter list of exactly 2 {{value 0-100,label,color}}, household_composition list of {{label,value 0-100,dark bool}}, type_summary string),
+                "schools" (object: pending_notice string or empty, summary string, list of {{type,name,distance,score 0-100}}, family_fit list of {{label,value 0-100,dark bool}}, verdict string),
+                "risk" (object: summary string, entries list of {{level: low|medium|high,title,detail,badge}}, disclaimer string),
+                "verdict" (object: match_score int 0-100, subscores list of {{label,value 0-100,good bool}}, strengths list of strings, considerations list of strings, next_step string, comparable_suburbs list of {{name,postcode,price}}),
+                "listings" ({json.dumps(listings_records)} -- reformat/annotate these into a list of {{address,price,badge_score,availability}} if available, else provide representative market listing examples).
+
+                Ground every figure in the Source Data; provide realistic, well-reasoned Australian real estate figures where specific data points are estimated.
+                """
+
+                # Execute with selected AI Service
+                if is_anthropic:
+                    report_data = self.anthropic_service.generate_report_data(full_prompt)
+                else:
+                    report_data = self.gemini_service.generate_report_data(full_prompt)
+
+                # Ensure snapshot highlight flag defaults safely
                 snapshot = report_data.get("snapshot", {})
                 if isinstance(snapshot, dict):
                     for stat in snapshot.get("stats", []):
                         if isinstance(stat, dict):
                             stat.setdefault("highlight", False)
 
-                # 3) Deterministic fields we already know for certain -- set
-                #    these ourselves rather than trusting the model to echo
-                #    them back correctly.
-                report_data["suburb"] = suburb or report_data.get("suburb", "")
+                # Set verified deterministic fields
+                report_data["suburb"] = suburb_clean or report_data.get("suburb", suburb)
                 report_data["postcode"] = postcode_str or report_data.get("postcode", "")
-                report_data.setdefault("state_display", "AUSTRALIA")
+                report_data["state_display"] = state_str if state_str else "AUSTRALIA"
 
-                # 3) Jinja2 renders the data into the HTML template. Template
-                #    markup/CSS is never touched by the AI at any point.
+                # Render HTML with Jinja2 template
                 report_html = self.template_service.render(self.session.template_content, report_data)
-
                 self.session.generated_report_html = report_html
-                st.success("✅ Report generated successfully!")
+                st.success(f"✅ Report generated successfully using {self.session.ai_provider}!")
+
             except Exception as e:
-                st.error(f"Failed to generate report from Gemini API: {e}")
+                st.error(f"❌ Failed to generate report: {e}")
             finally:
                 UiHelper.stop_loader(loader_placeholder)
 
@@ -199,14 +273,13 @@ class ReportGenerationComponent:
             html_code = self.session.generated_report_html
 
             try:
-                # Convert HTML to PDF
                 pdf_bytes = self.pdf_service.convert_html_to_pdf(html_code)
-                
                 if pdf_bytes:
+                    clean_suburb_name = suburb.replace(' ', '_') if suburb else 'Property'
                     st.download_button(
                         label="📥 Download PDF Report",
                         data=pdf_bytes,
-                        file_name=f"SmartPropGuid_Report_{suburb.replace(' ', '_') if suburb else 'General'}.pdf",
+                        file_name=f"SmartPropGuid_Report_{clean_suburb_name}.pdf",
                         mime="application/pdf",
                         use_container_width=True
                     )

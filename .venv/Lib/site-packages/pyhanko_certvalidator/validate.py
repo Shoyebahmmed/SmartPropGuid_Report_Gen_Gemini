@@ -1,11 +1,10 @@
-# coding: utf-8
-
 import asyncio
 import datetime
 import enum
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Dict, FrozenSet, Iterable, List, Optional, Set
+from typing import Optional
 
 from asn1crypto import algos, cms, core, x509
 from asn1crypto.x509 import Validity
@@ -70,9 +69,11 @@ from .util import (
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_PKIX_PARAMS = PKIXValidationParams()
+
 
 def validate_path(
-    validation_context, path, parameters: Optional[PKIXValidationParams] = None
+    validation_context, path, parameters: PKIXValidationParams | None = None
 ):
     """
     Validates the path using the algorithm from
@@ -115,7 +116,7 @@ def validate_path(
 async def async_validate_path(
     validation_context: ValidationContext,
     path: ValidationPath,
-    parameters: Optional[PKIXValidationParams] = None,
+    parameters: PKIXValidationParams | None = None,
 ):
     """
     Validates the path using the algorithm from
@@ -152,8 +153,8 @@ async def async_validate_path(
 
 def validate_usage(
     cert: x509.Certificate,
-    key_usage: Set[str],
-    extended_key_usage: Set[str],
+    key_usage: set[str],
+    extended_key_usage: set[str],
     extended_optional: bool,
 ):
     """
@@ -216,7 +217,7 @@ def validate_usage(
 
 def validate_aa_usage(
     cert: x509.Certificate,
-    extended_key_usage: Optional[Set[str]] = None,
+    extended_key_usage: set[str] | None = None,
 ):
     """
     Validate AA certificate profile conditions in RFC 5755 § 4.5
@@ -339,8 +340,8 @@ def _candidate_ac_issuers(
     #  Outside the scope of RFC 5755, but it might make sense
 
     issuer_rec = attr_cert['ac_info']['issuer']
-    aa_names: Optional[x509.GeneralNames] = None
-    aa_iss_serial: Optional[bytes] = None
+    aa_names: x509.GeneralNames | None = None
+    aa_iss_serial: bytes | None = None
     if issuer_rec.name == 'v1_form':
         aa_names = issuer_rec.chosen
     else:
@@ -363,7 +364,7 @@ def _candidate_ac_issuers(
     # Process the AKI extension if there is one
     aki_ext = get_ac_extension_value(attr_cert, 'authority_key_identifier')
     if aki_ext is not None:
-        aki, aa_issuer, aki_aa_iss_serial = _process_aki_ext(aki_ext)
+        aki, _aa_issuer, aki_aa_iss_serial = _process_aki_ext(aki_ext)
         if aki_aa_iss_serial is not None:
             if aa_iss_serial is not None and aa_iss_serial != aki_aa_iss_serial:
                 raise InvalidAttrCertificateError(
@@ -515,7 +516,7 @@ class ACValidationResult:
     The validation path of the attribute authority's certificate.
     """
 
-    approved_attributes: Dict[str, cms.AttCertAttribute]
+    approved_attributes: dict[str, cms.AttCertAttribute]
     """
     Approved attributes in the attribute certificate, possibly filtered by
     AA controls.
@@ -525,8 +526,8 @@ class ACValidationResult:
 async def async_validate_ac(
     attr_cert: cms.AttributeCertificateV2,
     validation_context: ValidationContext,
-    aa_pkix_params: PKIXValidationParams = PKIXValidationParams(),
-    holder_cert: Optional[x509.Certificate] = None,
+    aa_pkix_params: PKIXValidationParams = DEFAULT_PKIX_PARAMS,
+    holder_cert: x509.Certificate | None = None,
 ) -> ACValidationResult:
     """
     Validate an attribute certificate with respect to a given validation
@@ -598,8 +599,8 @@ async def async_validate_ac(
         attr_cert, validation_context.certificate_registry
     )
 
-    exceptions: List[Exception] = []
-    aa_path: Optional[ValidationPath] = None
+    exceptions: list[Exception] = []
+    aa_path: ValidationPath | None = None
     for aa_candidate in aa_candidates:
         try:
             validate_aa_usage(aa_candidate)
@@ -706,7 +707,7 @@ class _PathValidationState:
     def init_pkix_validation_state(
         path_length,
         trust_anchor: TrustAnchor,
-        parameters: Optional[PKIXValidationParams],
+        parameters: PKIXValidationParams | None,
     ):
         trust_anchor_quals = trust_anchor.trust_qualifiers
         max_path_length = max_aa_path_length = path_length
@@ -973,7 +974,7 @@ async def intl_validate_path(
     validation_context: ValidationContext,
     path: ValidationPath,
     proc_state: ValProcState,
-    parameters: Optional[PKIXValidationParams] = None,
+    parameters: PKIXValidationParams | None = None,
     cert_profile: EECertProfile = EECertProfile.REGULAR,
 ):
     """
@@ -1036,7 +1037,7 @@ async def intl_validate_path(
         trust_anchor, interm=[], leaf=None
     )
 
-    cert: Optional[x509.Certificate]
+    cert: x509.Certificate | None
     authority = trust_anchor.authority
     if isinstance(authority, AuthorityWithCert):
         # if the trust root has a cert, record it as validated.
@@ -1186,12 +1187,14 @@ def _finish_policy_processing(
     if state.explicit_policy != 0:
         state.explicit_policy -= 1
     # Step 4 b
-    if cert.policy_constraints_value:
-        if cert.policy_constraints_value['require_explicit_policy'].native == 0:
-            state.explicit_policy = 0
+    if (
+        cert.policy_constraints_value
+        and cert.policy_constraints_value['require_explicit_policy'].native == 0
+    ):
+        state.explicit_policy = 0
     # Step 4 g
     # Step 4 g i
-    intersection: Optional[PolicyTreeRoot]
+    intersection: PolicyTreeRoot | None
     if state.valid_policy_tree is None:
         intersection = None
 
@@ -1204,7 +1207,7 @@ def _finish_policy_processing(
         intersection = prune_unacceptable_policies(
             path_length, state.valid_policy_tree, acceptable_policies
         )
-    qualified_policies: FrozenSet[QualifiedPolicy] = frozenset()
+    qualified_policies: frozenset[QualifiedPolicy] = frozenset()
     if intersection is not None:
         # collect policies in a user-friendly format and attach them to the
         # path object
@@ -1476,10 +1479,13 @@ def _prepare_next_step(
     #  parameters are drawn form the signature parameters, where they
     #  must always be present.
     copy_params = None
-    if cert.public_key.algorithm == 'dsa' and cert.public_key.hash_algo is None:
-        if state.working_public_key.algorithm == 'dsa':
-            key_alg = state.working_public_key['algorithm']
-            copy_params = key_alg['parameters'].copy()
+    if (
+        cert.public_key.algorithm == 'dsa'
+        and cert.public_key.hash_algo is None
+        and state.working_public_key.algorithm == 'dsa'
+    ):
+        key_alg = state.working_public_key['algorithm']
+        copy_params = key_alg['parameters'].copy()
 
     if copy_params:
         working_public_key = cert.public_key.copy()

@@ -199,6 +199,125 @@ class GeminiService:
             raise ValueError(f"Gemini did not return valid JSON: {e}\n--- raw response ---\n{raw[:2000]}")
 
 
+class AnthropicService:
+    def __init__(self, config: AppConfig):
+        self.config = config
+
+    def generate_report_data(self, prompt: str) -> dict:
+        """
+        Asks Anthropic Claude for structured JSON content only (no HTML markup).
+        This dict is later merged into sample_template.html by TemplateService
+        using Jinja2 -- Claude never sees or touches the HTML/CSS.
+        """
+        if not self.config.anthropic_api_key:
+            raise ValueError("Anthropic API key is missing. Please add it to your Cred.env file.")
+
+        import anthropic
+        client = anthropic.Anthropic(api_key=self.config.anthropic_api_key)
+        model_name = self.config.claude_model or "claude-sonnet-4-6"
+
+        system_prompt = (
+            "You are an expert Australian real estate research analyst. "
+            "Generate the requested suburb report content strictly adhering to the JSON schema provided in the user prompt. "
+            "You MUST respond ONLY with a single valid JSON object. Do NOT include markdown code blocks, conversational text, or HTML markup."
+        )
+
+        response = client.messages.create(
+            model=model_name,
+            max_tokens=8192,
+            system=system_prompt,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        raw = response.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```", 2)[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        raw = raw.strip().rstrip("`").strip()
+
+        # Find outer-most JSON object if any leading/trailing text exists
+        first_brace = raw.find("{")
+        last_brace = raw.rfind("}")
+        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+            raw = raw[first_brace:last_brace+1]
+
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Claude did not return valid JSON: {e}\n--- raw response ---\n{raw[:2000]}")
+
+
+class HtagService:
+    ENDPOINT = "https://agent.htagai.com/micro-agents/agents/suburb-analysis/execute"
+    _cache = {}
+
+    def __init__(self, config: AppConfig):
+        self.config = config
+
+    def fetch_suburb_analysis(self, suburb: str, state: str = "", postcode: str = "", property_type: str = "house", force_refresh: bool = False) -> dict:
+        """
+        Calls HTAG micro-agent API endpoint to retrieve rich real-time suburb intelligence.
+        Caches results in memory to optimize latency and token credits.
+        """
+        if not self.config.htag_api_key:
+            raise ValueError("HTAG API key is missing. Please add it to your Cred.env file.")
+
+        import requests
+
+        # Normalize property type to allowed enum: 'house', 'unit', 'townhouse', 'land'
+        pt_normalized = "house"
+        if property_type:
+            pt_clean = property_type.lower().strip()
+            if "unit" in pt_clean or "apartment" in pt_clean or "flat" in pt_clean:
+                pt_normalized = "unit"
+            elif "townhouse" in pt_clean or "semi" in pt_clean or "terrace" in pt_clean:
+                pt_normalized = "townhouse"
+            elif "land" in pt_clean:
+                pt_normalized = "land"
+            else:
+                pt_normalized = "house"
+
+        cache_key = f"{suburb.strip().lower()}_{state.strip().lower()}_{str(postcode).strip()}_{pt_normalized}"
+        if not force_refresh and cache_key in self._cache:
+            return self._cache[cache_key]
+
+        payload = {
+            "suburb": suburb.strip(),
+            "property_type": pt_normalized
+        }
+        if state:
+            payload["state"] = state.strip().upper()
+        if postcode:
+            payload["postcode"] = str(postcode).strip()
+
+        headers = {
+            "x-api-key": self.config.htag_api_key,
+            "Authorization": f"Bearer {self.config.htag_api_key}",
+            "Content-Type": "application/json"
+        }
+
+        try:
+            response = requests.post(self.ENDPOINT, headers=headers, json=payload, timeout=120)
+            if response.status_code != 200:
+                error_msg = response.text
+                try:
+                    err_json = response.json()
+                    error_msg = err_json.get("detail", response.text)
+                except Exception:
+                    pass
+                raise RuntimeError(f"HTAG API returned status {response.status_code}: {error_msg}")
+
+            result = response.json()
+            self._cache[cache_key] = result
+            return result
+        except requests.exceptions.Timeout:
+            raise TimeoutError("HTAG Suburb Analysis request timed out after 120 seconds. Please try again.")
+        except requests.exceptions.RequestException as req_err:
+            raise RuntimeError(f"Network communication with HTAG API failed: {req_err}")
+
+
+
 class TemplateService:
     """
     Renders sample_template.html (a Jinja2 template) with a data dict.
@@ -283,7 +402,7 @@ class PdfService:
                     position:absolute;
                     left:0;
                     right:0;
-                    bottom:0;
+                    top:0;
                     box-sizing:border-box;
                     background:#162338;
                     -webkit-print-color-adjust:exact;
@@ -305,7 +424,12 @@ class PdfService:
                                 padding-right:12mm;
                                 text-align:right;
                                 vertical-align:middle;
-                                color:#ffffff;
+                                font-size: 10pt;
+                                font-weight: 600;
+                                color: rgba(215, 179, 94, 0.6);
+                                letter-spacing: 0.3em;
+                                text-transform: uppercase;
+                                margin-left: auto;
                             ">
                                 SMARTPROPGUIDE
                             </td>
@@ -316,7 +440,7 @@ class PdfService:
                 FOOTER_TEMPLATE = """
                                 <div style="
                                     width:100%;
-                                    height:14mm;
+                                    height:10mm;
                                     margin:0;
                                     padding:0;
                                     position:absolute;
@@ -342,7 +466,12 @@ class PdfService:
                                             <td style="
                                                 padding-left:12mm;
                                                 vertical-align:middle;
-                                                color:#ffffff;
+                                                font-size: 10pt;
+                                                font-weight: 600;
+                                                color: rgba(215, 179, 94, 0.6);
+                                                letter-spacing: 0.3em;
+                                                text-transform: uppercase;
+                                                margin-left: auto;
                                             ">
                                                 Provided by SMARTPROPGUIDE
                                             </td>

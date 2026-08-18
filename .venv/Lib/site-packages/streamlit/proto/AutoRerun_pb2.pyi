@@ -17,8 +17,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+from collections import abc as _abc
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
+from google.protobuf.internal import containers as _containers
 import builtins as _builtins
 import sys
 import typing as _typing
@@ -53,3 +55,29 @@ class AutoRerun(_message.Message):
     def WhichOneof(self, oneof_group: _Never) -> None: ...
 
 Global___AutoRerun: _TypeAlias = AutoRerun  # noqa: Y015
+
+@_typing.final
+class StopAutoRerun(_message.Message):
+    """Sent when the server evicts fragments (e.g. an ancestor stopped rendering
+    them), so the client can cancel their pending auto-rerun timers.
+    """
+
+    DESCRIPTOR: _descriptor.Descriptor
+
+    FRAGMENT_IDS_FIELD_NUMBER: _builtins.int
+    @_builtins.property
+    def fragment_ids(self) -> _containers.RepeatedScalarFieldContainer[_builtins.str]:
+        """The fragment IDs whose auto-rerun timers should be cancelled."""
+
+    def __init__(
+        self,
+        *,
+        fragment_ids: _abc.Iterable[_builtins.str] | None = ...,
+    ) -> None: ...
+    _HasFieldArgType: _TypeAlias = _Never  # noqa: Y015
+    def HasField(self, field_name: _HasFieldArgType) -> _builtins.bool: ...
+    _ClearFieldArgType: _TypeAlias = _typing.Literal["fragment_ids", b"fragment_ids"]  # noqa: Y015
+    def ClearField(self, field_name: _ClearFieldArgType) -> None: ...
+    def WhichOneof(self, oneof_group: _Never) -> None: ...
+
+Global___StopAutoRerun: _TypeAlias = StopAutoRerun  # noqa: Y015
