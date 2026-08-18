@@ -402,7 +402,7 @@ class PdfService:
                     position:absolute;
                     left:0;
                     right:0;
-                    bottom:0;
+                    top:0;
                     box-sizing:border-box;
                     background:#162338;
                     -webkit-print-color-adjust:exact;
@@ -424,7 +424,12 @@ class PdfService:
                                 padding-right:12mm;
                                 text-align:right;
                                 vertical-align:middle;
-                                color:#ffffff;
+                                font-size: 10pt;
+                                font-weight: 600;
+                                color: rgba(215, 179, 94, 0.6);
+                                letter-spacing: 0.3em;
+                                text-transform: uppercase;
+                                margin-left: auto;
                             ">
                                 SMARTPROPGUIDE
                             </td>
@@ -435,7 +440,7 @@ class PdfService:
                 FOOTER_TEMPLATE = """
                                 <div style="
                                     width:100%;
-                                    height:14mm;
+                                    height:10mm;
                                     margin:0;
                                     padding:0;
                                     position:absolute;
@@ -461,7 +466,12 @@ class PdfService:
                                             <td style="
                                                 padding-left:12mm;
                                                 vertical-align:middle;
-                                                color:#ffffff;
+                                                font-size: 10pt;
+                                                font-weight: 600;
+                                                color: rgba(215, 179, 94, 0.6);
+                                                letter-spacing: 0.3em;
+                                                text-transform: uppercase;
+                                                margin-left: auto;
                                             ">
                                                 Provided by SMARTPROPGUIDE
                                             </td>
