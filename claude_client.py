@@ -16,23 +16,33 @@ That's it. One line change in his generate button block.
 import os
 import anthropic
 
-API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+API_KEY = None
 MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6").strip() or "claude-sonnet-4-6"
-MAX_TOKENS = int(os.environ.get("CLAUDE_MAX_TOKENS", "8192"))
+MAX_TOKENS = int(os.environ.get("CLAUDE_MAX_TOKENS", "16000"))
 
 
 SYSTEM_PROMPT = """You are a professional property analyst writing reports for
 first-time home buyers in Australia (VIC and NSW).
 
 CRITICAL RULES:
-1. NEVER invent numbers. If a data point is missing, write "data not available"
-   -- do not estimate, do not extrapolate.
-2. Return ONLY the completed HTML. Start with <!DOCTYPE html> and end with </html>.
-   NO markdown fences (no ```html), NO preamble, NO explanation outside HTML.
+1. Never present fabricated precision as verified fact. When a data point isn't
+   backed by the supplied Source Data, give a clearly-scoped, reasonable estimate
+   instead ("typically around...") rather than inventing a suspiciously exact
+   figure -- but always give a usable number so the report doesn't read as empty.
+   Only write "data not available" when no reasonable estimate can be inferred
+   from the inputs at all.
+2. Return ONLY the exact HTML fragment the compiling instructions ask for -- no
+   more, no less. Some requests want a full document (<!DOCTYPE html> ... </html>);
+   others want only specific page divs. Follow whatever boundary the
+   instructions specify. NO markdown fences (no ```html), NO preamble, NO
+   explanation outside the HTML.
 3. Preserve the template's structure, CSS classes, and layout exactly.
    Only replace placeholder values with real data.
-4. Plain English. Avoid heavy investor jargon like "ROI compression" or
-   "yield decompression" -- first-home buyers get scared by that language.
+4. This report is read directly by the client, not another analyst. Plain,
+   warm, everyday English -- no investor jargon ("ROI compression", "yield
+   decompression"), no unexplained acronyms. Every number, score, or
+   recommendation needs a short plain-English reason attached to it explaining
+   what it means for THIS buyer -- never leave a bare figure to speak for itself.
 5. Be honest about affordability. If the budget doesn't match the market,
    say so clearly.
 6. State-aware advice:
@@ -44,33 +54,32 @@ CRITICAL RULES:
 
 def generate_html_report(full_prompt):
     """
+  
     Send Shoeb's already-built full_prompt to Claude, return clean HTML.
-
-    Matches the shape of his old call:
-        response = genai.GenerativeModel('gemini-2.5-flash').generate_content(full_prompt)
-        clean_html = response.text.strip()
+    Reads API key fresh on each call so dotenv loading order doesn't matter.
     """
-    if not API_KEY:
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    model = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6").strip() or "claude-sonnet-4-6"
+
+    if not api_key:
         raise RuntimeError(
             "ANTHROPIC_API_KEY not set. Add it to Cred.env or .env."
         )
 
-    client = anthropic.Anthropic(api_key=API_KEY)
+    client = anthropic.Anthropic(api_key=api_key)
 
     response = client.messages.create(
-        model=MODEL,
+        model=model,
         max_tokens=MAX_TOKENS,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": full_prompt}],
     )
 
-    # Extract text (Claude returns list of content blocks)
     html = ""
     for block in response.content:
         if hasattr(block, "text"):
             html += block.text
 
-    # Strip markdown fences if Claude added them (same as Shoeb's original code)
     html = html.strip()
     if html.startswith("```html"):
         html = html[7:]
@@ -80,7 +89,6 @@ def generate_html_report(full_prompt):
         html = html[:-3]
 
     return html.strip()
-
 
 # ---------------------------------------------------------------------------
 # Smoke test -- run: python claude_client.py

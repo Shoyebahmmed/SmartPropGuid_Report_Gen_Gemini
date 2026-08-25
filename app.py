@@ -1,12 +1,16 @@
 # from app import get_pdf_bytes_playwright
 import os
 import io
+import re
 import datetime
 import pandas as pd
 import streamlit as st
-import google.generativeai as genai
+from claude_client import generate_html_report
+from htag_client import fetch_suburb, AmbiguousSuburb
+from abs_client import fetch_census_medians
 import asyncio
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from playwright.async_api import async_playwright
 from dotenv import load_dotenv
 from xhtml2pdf import pisa
@@ -24,27 +28,29 @@ st.set_page_config(
 
 
 # abs_path = os.path.dirname(os.path.abspath(__file__))
-# logo_path = os.path.join(abs_path, "LOGO.svg")
-# html_code = html_code.replace('src="LOGO.svg"', f'src="{logo_path}"')
+# logo_path = os.path.join(abs_path, "LOGO.png")
+# html_code = html_code.replace('src="LOGO.png"', f'src="{logo_path}"')
 
 
 # Load environment variables from Cred.env or .env relative to script directory
 script_dir = os.path.dirname(os.path.abspath(__file__))
 cred_path = os.path.join(script_dir, "Cred.env")
 env_path = os.path.join(script_dir, ".env")
+print(f"DEBUG: Looking for Cred.env at: {cred_path}")
+print(f"DEBUG: File exists: {os.path.exists(cred_path)}")
 
 if os.path.exists(cred_path):
     load_dotenv(cred_path)
 else:
     load_dotenv(env_path)
 
-# Initialize Gemini API
-api_key = os.environ.get("GEMINI_API_KEY")
-if api_key:
-    genai.configure(api_key=api_key)
-else:
-    st.warning("⚠️ GEMINI_API_KEY not found in Cred.env or system environment. Please configure it to enable AI generation.")
 
+# Initialize Anthropic Claude API
+api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+if not api_key:
+    st.warning("⚠️ ANTHROPIC_API_KEY not found in Cred.env. Please configure it to enable AI generation.")
+
+htag_key = os.environ.get("HTAG_API_KEY", "").strip()
 # Initialize Session State
 if "theme" not in st.session_state:
     st.session_state.theme = "dark"
@@ -71,10 +77,6 @@ FORM_DEFAULTS = {
 for k, v in FORM_DEFAULTS.items():
     if k not in st.session_state:
         st.session_state[k] = v
-# Checkbox defaults
-for i in range(11):
-    if f"priority_{i}" not in st.session_state:
-        st.session_state[f"priority_{i}"] = False
 
 # Toggle Theme Helper
 def toggle_theme():
@@ -99,6 +101,37 @@ def stop_loader(placeholder):
 
 IS_DARK = st.session_state.theme == "dark"
 
+# Splits a run of concatenated `<div class="page">...</div>` /
+# `<div class="page page-2">...</div>` blocks back into a list of the
+# individual page strings. Used to divide the report template into two
+# halves for parallel generation, and to pull the pieces back apart again
+# once Claude has returned each half.
+PAGE_START_RE = re.compile(r'<div class="page(?: page-2)?">')
+
+def split_into_pages(html_fragment):
+    starts = [m.start() for m in PAGE_START_RE.finditer(html_fragment)]
+    if not starts:
+        return [html_fragment]
+    starts.append(len(html_fragment))
+    return [html_fragment[starts[i]:starts[i + 1]] for i in range(len(starts) - 1)]
+
+# Budget bracket options for the intake form, mapped to their (min, max) bounds
+# in dollars (None = open-ended). Single source of truth for both the
+# selectbox options and the listings filter below, so the two can never drift.
+BUDGET_RANGES = {
+    "Under $500k": (None, 500_000),
+    "$500k–$800k": (500_000, 800_000),
+    "$800k–$1.2M": (800_000, 1_200_000),
+    "$1.2M–$1.5M": (1_200_000, 1_500_000),
+    "$1.5M–$2M": (1_500_000, 2_000_000),
+    "$2M–$2.5M": (2_000_000, 2_500_000),
+    "$2.5M–$3M": (2_500_000, 3_000_000),
+    "$3M–$4M": (3_000_000, 4_000_000),
+    "$4M–$5M": (4_000_000, 5_000_000),
+    "Above $5M": (5_000_000, None),
+}
+BUDGET_OPTIONS = list(BUDGET_RANGES.keys())
+
 # Helper to filter property listing datasets by postcode and budget
 def filter_property_data(df, postcode_str, budget_str, property_type_str):
     if df is None or len(df) == 0:
@@ -111,15 +144,12 @@ def filter_property_data(df, postcode_str, budget_str, property_type_str):
                 df_filtered = df_filtered[df_filtered['Property post code'] == pc_val]
         except ValueError:
             pass
-    if budget_str and 'Purchase price' in df_filtered.columns:
-        if "Under $500k" in budget_str:
-            df_filtered = df_filtered[df_filtered['Purchase price'] < 500000]
-        elif "$500k" in budget_str and "$800k" in budget_str:
-            df_filtered = df_filtered[(df_filtered['Purchase price'] >= 500000) & (df_filtered['Purchase price'] <= 800000)]
-        elif "$800k" in budget_str and "$1.2M" in budget_str:
-            df_filtered = df_filtered[(df_filtered['Purchase price'] >= 800000) & (df_filtered['Purchase price'] <= 1200000)]
-        elif "Above $1.2M" in budget_str:
-            df_filtered = df_filtered[df_filtered['Purchase price'] > 1200000]
+    if budget_str and budget_str in BUDGET_RANGES and 'Purchase price' in df_filtered.columns:
+        low, high = BUDGET_RANGES[budget_str]
+        if low is not None:
+            df_filtered = df_filtered[df_filtered['Purchase price'] >= low]
+        if high is not None:
+            df_filtered = df_filtered[df_filtered['Purchase price'] <= high]
     if property_type_str and 'Primary purpose' in df_filtered.columns:
         if property_type_str == "Land":
             df_filtered = df_filtered[df_filtered['Primary purpose'] == 'Vacant land']
@@ -138,7 +168,7 @@ def filter_property_data(df, postcode_str, budget_str, property_type_str):
 # 2. DESIGN SYSTEM & CSS INJECTION
 # ==============================================================================
 # Color palette definitions depending on the selected theme
-BG_COLOR = "#09090b" if IS_DARK else "#ffffff"
+BG_COLOR = "#1A2336" if IS_DARK else "#28344D"
 BG_SUBTLE = "#0c0c0f" if IS_DARK else "#f9fafb"
 CARD_COLOR = "#0c0c0f" if IS_DARK else "#ffffff"
 CARD_HOVER = "#131316" if IS_DARK else "#f4f4f5"
@@ -242,18 +272,20 @@ css = f"""
         gap: 1.5rem !important;
     }}
 
-    /* Custom Card container */
-    .zinc-card {{
-        background-color: {CARD_COLOR};
-        border: 1px solid {BORDER_COLOR};
-        border-radius: 12px;
-        padding: 1.75rem;
+    /* Bordered card containers — st.container(border=True) */
+    div[data-testid="stVerticalBlockBorderWrapper"] {{
         margin-bottom: 1.5rem;
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     }}
-    .zinc-card:hover {{
-        border-color: {ACCENT_COLOR};
-        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    div[data-testid="stVerticalBlockBorderWrapper"] > div[data-testid="stVerticalBlock"] {{
+        background-color: {CARD_COLOR} !important;
+        border: 1px solid {BORDER_COLOR} !important;
+        border-radius: 12px !important;
+        padding: 1.75rem !important;
+        gap: 1rem !important;
+        transition: border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }}
+    div[data-testid="stVerticalBlockBorderWrapper"] > div[data-testid="stVerticalBlock"]:hover {{
+        border-color: {ACCENT_COLOR} !important;
     }}
 
     /* Brand banner styling */
@@ -414,13 +446,21 @@ st.markdown(css, unsafe_allow_html=True)
 # ==============================================================================
 # 3. HEADER & BRAND AREA
 # ==============================================================================
+# Load the logo mark for the header (falls back to a text glyph if missing)
+logo_path = os.path.join(script_dir, "LOGO.png")
+if os.path.exists(logo_path):
+    with open(logo_path, "rb") as f:
+        logo_html = f'<img src="data:image/png;base64,{base64.b64encode(f.read()).decode("utf-8")}" style="height:44px; width:44px; border-radius:10px; object-fit:cover;" alt="SmartPropGuid logo" />'
+else:
+    logo_html = '<span class="brand-logo">◆</span>'
+
 head_left, head_right = st.columns([9, 2])
 with head_left:
     st.markdown(f"""
     <div class="brand">
+        {logo_html}
         <div>
-            <span class="brand-logo">◆ SmartPropGuid</span>
-            <span class="brand-title">Report Engine</span>
+            <span class="brand-title">SmartPropGuid Report Engine</span>
             <div class="brand-subtitle">Pre-Sales Manual Compilation & AI Generation Tool</div>
         </div>
     </div>
@@ -450,78 +490,76 @@ with tab_preferences:
     st.markdown("Capture customer search requirements to guide the AI report writer.")
     
     # --- Customer Info Card ---
-    st.markdown('<div class="zinc-card">', unsafe_allow_html=True)
-    st.markdown("<h4>Customer Information</h4>", unsafe_allow_html=True)
-    ci_col1, ci_col2, ci_col3 = st.columns(3)
-    with ci_col1:
-        st.text_input("Full Name", placeholder="e.g. John Smith", key="full_name")
-    with ci_col2:
-        st.text_input("Phone Number", placeholder="e.g. 0412 345 678", key="phone")
-    with ci_col3:
-        st.text_input("Email Address", placeholder="e.g. john@email.com", key="email")
-    st.markdown('</div>', unsafe_allow_html=True)
-    
+    with st.container(border=True):
+        st.markdown("<h4>Customer Information</h4>", unsafe_allow_html=True)
+        ci_col1, ci_col2, ci_col3 = st.columns(3)
+        with ci_col1:
+            st.text_input("Full Name", placeholder="e.g. John Smith", key="full_name")
+        with ci_col2:
+            st.text_input("Phone Number", placeholder="e.g. 0412 345 678", key="phone")
+        with ci_col3:
+            st.text_input("Email Address", placeholder="e.g. john@email.com", key="email")
+
     col1, col2 = st.columns(2)
-    
+
     with col1:
-        st.markdown('<div class="zinc-card">', unsafe_allow_html=True)
-        st.markdown("<h4>Property Details</h4>", unsafe_allow_html=True)
-        
-        property_type = st.selectbox(
-            "What type of property are you looking for?",
-            options=["House", "Unit", "Townhouse", "Land", "Not sure"],
-            key="property_type"
-        )
-        
-        suburb = st.text_input(
-            "Which suburb or area are you interested in?",
-            placeholder="e.g. Richmond, VIC 3121 or 2000",
-            key="suburb"
-        )
-        
-        budget = st.selectbox(
-            "What is your budget?",
-            options=["Under $500k", "$500k–$800k", "$800k–$1.2M", "Above $1.2M"],
-            key="budget"
-        )
-        
-        intention = st.selectbox(
-            "Are you buying to live in or invest?",
-            options=["Live in", "Invest", "Both"],
-            key="intention"
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
-        
+        with st.container(border=True):
+            st.markdown("<h4>Property Details</h4>", unsafe_allow_html=True)
+
+            property_type = st.selectbox(
+                "What type of property are you looking for?",
+                options=["House", "Unit", "Townhouse", "Land", "Not sure"],
+                key="property_type"
+            )
+
+            suburb = st.text_input(
+                "Which suburb or area are you interested in?",
+                placeholder="e.g. Richmond, VIC 3121 or 2000",
+                key="suburb"
+            )
+
+            budget = st.selectbox(
+                "What is your budget?",
+                options=BUDGET_OPTIONS,
+                key="budget"
+            )
+
+            intention = st.selectbox(
+                "Are you buying to live in or invest?",
+                options=["Live in", "Invest", "Both"],
+                key="intention"
+            )
+
     with col2:
-        st.markdown('<div class="zinc-card">', unsafe_allow_html=True)
-        st.markdown("<h4>Sub-regional Priorities & Preferences</h4>", unsafe_allow_html=True)
-        
-        priorities_list = [
-            "Good schools nearby",
-            "Public transport access",
-            "Shopping centres nearby",
-            "Parks and green spaces",
-            "Hospital or medical centre nearby",
-            "Low flood risk",
-            "Low bushfire risk",
-            "Quiet neighbourhood",
-            "Investment potential",
-            "Family friendly area",
-            "Close to CBD"
-        ]
-        
-        selected_priorities = []
-        st.markdown("<p style='font-size:0.85rem; color:"+TEXT_MUTED+"; margin-bottom:10px;'>Select all that apply:</p>", unsafe_allow_html=True)
-        
-        # Grid of checkboxes for priorities
-        cb_cols = st.columns(2)
-        for i, priority in enumerate(priorities_list):
-            with cb_cols[i % 2]:
-                if st.checkbox(priority, key=f"priority_{i}"):
-                    selected_priorities.append(priority)
-                    
-        st.markdown('</div>', unsafe_allow_html=True)
-        
+        with st.container(border=True):
+            st.markdown("<h4>Sub-regional Priorities & Preferences</h4>", unsafe_allow_html=True)
+
+            priorities_list = [
+                "Good schools nearby",
+                "Public transport access",
+                "Shopping centres nearby",
+                "Parks and green spaces",
+                "Hospital or medical centre nearby",
+                "Low flood risk",
+                "Low bushfire risk",
+                "Quiet neighbourhood",
+                "Investment potential",
+                "Family friendly area",
+                "Close to CBD"
+            ]
+
+            st.markdown("<p style='font-size:0.85rem; color:"+TEXT_MUTED+"; margin-bottom:10px;'>Tap to select the features that matter most:</p>", unsafe_allow_html=True)
+
+            # Toggle-chip multi-select (replaces the old 2-column checkbox grid)
+            selected_priorities = st.pills(
+                "Priorities",
+                options=priorities_list,
+                selection_mode="multi",
+                default=[],
+                label_visibility="collapsed",
+                key="priorities_pills",
+            ) or []
+
     # --- Reset & Submit Buttons ---
     st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
     btn_col1, btn_col2, btn_spacer = st.columns([1, 1, 4])
@@ -530,10 +568,8 @@ with tab_preferences:
             for k in FORM_DEFAULTS.keys():
                 if k in st.session_state:
                     del st.session_state[k]
-            for i in range(len(priorities_list)):
-                key = f"priority_{i}"
-                if key in st.session_state:
-                    del st.session_state[key]
+            if "priorities_pills" in st.session_state:
+                del st.session_state["priorities_pills"]
             st.rerun()
     with btn_col2:
         if st.button("✅ Submit", use_container_width=True, key="submit_btn"):
@@ -591,11 +627,8 @@ with tab_preferences:
                                 
                             suburb_clean = re.sub(r"[,\-\s]+", " ", suburb_clean).strip()
                         
-                        # Map priority checkboxes to Yes/No
-                        priorities_yes_no = []
-                        for i in range(11):
-                            val = "Yes" if st.session_state.get(f"priority_{i}") else "No"
-                            priorities_yes_no.append(val)
+                        # Map priority chip selections to Yes/No
+                        priorities_yes_no = ["Yes" if p in selected_priorities else "No" for p in priorities_list]
                         
                         next_row = last_row + 1
                         
@@ -649,87 +682,84 @@ with tab_upload:
     col_data, col_template = st.columns(2)
     
     with col_data:
-        st.markdown('<div class="zinc-card">', unsafe_allow_html=True)
-        st.markdown("<h4>1. Source Data File (CSV / Excel)</h4>", unsafe_allow_html=True)
-        st.markdown(f"<p style='font-size:0.8rem; color:{TEXT_MUTED};'>Upload the property listings, demographics or market statistics file compiled manually.</p>", unsafe_allow_html=True)
-        
-        uploaded_data = st.file_uploader(
-            "Select compiled data file",
-            type=["csv", "xlsx", "xls"],
-            key="data_uploader"
-        )
-        
-        # Read and display data preview
-        data_preview_html = ""
-        if uploaded_data is not None:
-            try:
-                uploaded_data.seek(0)
-                if uploaded_data.name.endswith(".csv"):
-                    st.session_state.df_data = pd.read_csv(uploaded_data)
-                else:
-                    st.session_state.df_data = pd.read_excel(uploaded_data)
-                
-                st.success(f"Successfully loaded: `{uploaded_data.name}` ({len(st.session_state.df_data)} rows)")
-                st.markdown("##### File Preview (First 5 Rows):")
-                st.dataframe(st.session_state.df_data.head(5), use_container_width=True)
-                
-                # Format to a table string for the LLM
-                data_preview_html = st.session_state.df_data.head(20).to_html(index=False, classes="data-table")
-            except Exception as e:
-                st.error(f"Error reading file: {e}")
-        else:
-            st.session_state.df_data = None
-            
-        df_data = st.session_state.df_data
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-    with col_template:
-        st.markdown('<div class="zinc-card">', unsafe_allow_html=True)
-        st.markdown("<h4>2. Predefined Report Template (HTML)</h4>", unsafe_allow_html=True)
-        st.markdown(f"<p style='font-size:0.8rem; color:{TEXT_MUTED};'>Upload your customized corporate report HTML template. Leave empty to use the system default template.</p>", unsafe_allow_html=True)
-        
-        uploaded_template = st.file_uploader(
-            "Select custom HTML template",
-            type=["html", "htm"],
-            key="template_uploader"
-        )
-        
-        # Load custom or default template
-        default_template_path = os.path.join(script_dir, "sample_template.html")
-        
-        if uploaded_template is not None:
-            try:
-                uploaded_template.seek(0)
-                st.session_state.template_content = uploaded_template.read().decode("utf-8")
-                st.success(f"Custom template loaded: `{uploaded_template.name}`")
-            except Exception as e:
-                st.error(f"Error reading template: {e}")
-        else:
-            if os.path.exists(default_template_path):
-                with open(default_template_path, "r", encoding="utf-8") as f:
-                    st.session_state.template_content = f.read()
-                st.info("ℹ️ Using default SmartPropGuid template.")
+        with st.container(border=True):
+            st.markdown("<h4>1. Source Data File (CSV / Excel)</h4>", unsafe_allow_html=True)
+            st.markdown(f"<p style='font-size:0.8rem; color:{TEXT_MUTED};'>Upload the property listings, demographics or market statistics file compiled manually.</p>", unsafe_allow_html=True)
+
+            uploaded_data = st.file_uploader(
+                "Select compiled data file",
+                type=["csv", "xlsx", "xls"],
+                key="data_uploader"
+            )
+
+            # Read and display data preview
+            data_preview_html = ""
+            if uploaded_data is not None:
+                try:
+                    uploaded_data.seek(0)
+                    if uploaded_data.name.endswith(".csv"):
+                        st.session_state.df_data = pd.read_csv(uploaded_data)
+                    else:
+                        st.session_state.df_data = pd.read_excel(uploaded_data)
+
+                    st.success(f"Successfully loaded: `{uploaded_data.name}` ({len(st.session_state.df_data)} rows)")
+                    st.markdown("##### File Preview (First 5 Rows):")
+                    st.dataframe(st.session_state.df_data.head(5), use_container_width=True)
+
+                    # Format to a table string for the LLM
+                    data_preview_html = st.session_state.df_data.head(20).to_html(index=False, classes="data-table")
+                except Exception as e:
+                    st.error(f"Error reading file: {e}")
             else:
-                st.session_state.template_content = ""
-                st.warning("⚠️ System default template not found. Please upload a template.")
-                
-        template_content = st.session_state.template_content
-        
-        # Template preview in a collapsible expander
-        if template_content:
-            with st.expander("👁️ View Template HTML Structure"):
-                st.markdown(f'<div class="preview-box">{template_content}</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+                st.session_state.df_data = None
+
+            df_data = st.session_state.df_data
+
+    with col_template:
+        with st.container(border=True):
+            st.markdown("<h4>2. Predefined Report Template (HTML)</h4>", unsafe_allow_html=True)
+            st.markdown(f"<p style='font-size:0.8rem; color:{TEXT_MUTED};'>Upload your customized corporate report HTML template. Leave empty to use the system default template.</p>", unsafe_allow_html=True)
+
+            uploaded_template = st.file_uploader(
+                "Select custom HTML template",
+                type=["html", "htm"],
+                key="template_uploader"
+            )
+
+            # Load custom or default template
+            default_template_path = os.path.join(script_dir, "sample_template.html")
+
+            if uploaded_template is not None:
+                try:
+                    uploaded_template.seek(0)
+                    st.session_state.template_content = uploaded_template.read().decode("utf-8")
+                    st.success(f"Custom template loaded: `{uploaded_template.name}`")
+                except Exception as e:
+                    st.error(f"Error reading template: {e}")
+            else:
+                if os.path.exists(default_template_path):
+                    with open(default_template_path, "r", encoding="utf-8") as f:
+                        st.session_state.template_content = f.read()
+                    st.info("ℹ️ Using default SmartPropGuid template.")
+                else:
+                    st.session_state.template_content = ""
+                    st.warning("⚠️ System default template not found. Please upload a template.")
+
+            template_content = st.session_state.template_content
+
+            # Template preview in a collapsible expander
+            if template_content:
+                with st.expander("👁️ View Template HTML Structure"):
+                    st.markdown(f'<div class="preview-box">{template_content}</div>', unsafe_allow_html=True)
 
     # Custom AI System Prompt
-    st.markdown('<div class="zinc-card">', unsafe_allow_html=True)
-    st.markdown("<h4>3. Pre-Sales Operator Instructions (Prompt)</h4>", unsafe_allow_html=True)
-    custom_prompt = st.text_area(
-        "Define what aspects you want the AI to emphasize in the report analysis",
-        value="Focus heavily on capital growth trends, school catchment boundaries, and transport proximity recommendations based on the customer requirements and listing data.",
-        height=100
-    )
-    st.markdown('</div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        st.markdown("<h4>3. Pre-Sales Operator Instructions (Prompt)</h4>", unsafe_allow_html=True)
+        custom_prompt = st.text_area(
+            "Define what aspects you want the AI to emphasize in the report analysis",
+            value="Focus heavily on capital growth trends, school catchment boundaries, and transport proximity recommendations based on the customer requirements and listing data.",
+            height=100
+        )
 
 # ------------------------------------------------------------------------------
 # TAB 3: AI GENERATION & PDF EXPORT
@@ -739,7 +769,7 @@ with tab_generate:
     
     # Check if API key is present
     if not api_key:
-        st.error("❌ Cannot generate report: Gemini API key is missing. Please add it to your Cred.env file.")
+        st.error("❌ Cannot generate report: Anthropic API key is missing. Please add ANTHROPIC_API_KEY to your Cred.env file.")
     else:
         # Layout: Settings Summary Card & Generation Button
         sum_col1, sum_col2 = st.columns([3, 1])
@@ -814,53 +844,164 @@ with tab_generate:
 
             # Inject rows into the selected HTML template
             filled_template = st.session_state.template_content.replace("{{ source_data_rows }}", source_data_rows)
-            
-            # Build Prompt
-            full_prompt = f"""
-            You are a professional property investment analyst assistant.
-            You must populate the HTML report template provided below based on the following Inputs.
 
-            --- INPUTS ---
-            1. Property Type Preference: {property_type}
-            2. Target Suburb/Area: {suburb}
-            3. Budget: {budget}
-            4. Purchase Intention: {intention}
-            5. Key Client Priorities: {', '.join(selected_priorities) if selected_priorities else "General property advice"}
-            6. Pre-Sales Operator Instructions: {custom_prompt}
-            
-            7. Source Data:
-            {data_context}
-            
-            --- HTML REPORT TEMPLATE ---
-            {filled_template}
+            # Split the template into its static <head> (fonts + the large inline
+            # <style> block) and the <body> content that actually needs per-suburb
+            # data. Only the body is sent to the model — the report template is
+            # ~90K characters and asking Claude to also reproduce the CSS verbatim
+            # on every request risks the response getting cut off by the token
+            # limit before any real page content is written (a truncated response
+            # mid-<style> is exactly what renders as a blank white PDF page).
+            body_start_tag = "<body>"
+            body_end_tag = "</body>"
+            if body_start_tag in filled_template and body_end_tag in filled_template:
+                head_html = filled_template[: filled_template.index(body_start_tag) + len(body_start_tag)]
+                body_inner = filled_template[
+                    filled_template.index(body_start_tag) + len(body_start_tag) : filled_template.index(body_end_tag)
+                ]
+                tail_html = filled_template[filled_template.index(body_end_tag):]
+            else:
+                # Custom uploaded template with no <body> tag — fall back to sending it whole.
+                head_html, body_inner, tail_html = "", filled_template, ""
 
-            --- COMPILING INSTRUCTIONS ---
-            1. Populate all variable placeholders in the HTML template (like `{{ executive_summary }}`, `{{ market_analysis }}`, `{{ key_priorities }}`, `{{ date_generated }}`).
-            2. For `{{ date_generated }}`, use today's date: {datetime.date.today().strftime("%B %d, %Y")}.
-            3. For `{{ key_priorities }}`, output a bulleted list based on the inputs.
-            4. The placeholder `{{ source_data_rows }}` has already been replaced with actual rows in the template.
-            5. Return ONLY the complete, final HTML code starting with `<!DOCTYPE html>` and ending with `</html>`.
-            6. Do NOT wrap the code in markdown blocks like ````html```` or add any conversational intro/outro text. Output only raw HTML.
-            """
+            # Build Prompt — shared by both chunks below
+            def build_prompt(page_html, page_names):
+                return f"""
+                You are a professional property investment analyst assistant. The report
+                you are writing is read directly by the client (a home buyer) — not by
+                another analyst.
+                You must populate the HTML report pages provided below based on the
+                following Inputs. This is one part of a larger report; the pages included
+                here, in this exact order, are: {page_names}.
 
-            loader_placeholder = start_loader("AI is analyzing data and populating report layout…")
+                --- INPUTS ---
+                1. Property Type Preference: {property_type}
+                2. Target Suburb/Area: {suburb}
+                3. Budget: {budget}
+                4. Purchase Intention: {intention}
+                5. Key Client Priorities: {', '.join(selected_priorities) if selected_priorities else "General property advice"}
+                6. Pre-Sales Operator Instructions: {custom_prompt}
+
+                7. Source Data:
+                {data_context}
+
+                --- HTML PAGES: {page_names} ---
+                {page_html}
+
+                --- WRITING STYLE (this is client-facing, not an investor memo) ---
+                a. Plain, warm, everyday English — no investor jargon (e.g. avoid "yield
+                   compression", "capital velocity"), no unexplained acronyms.
+                b. Never leave a number, score, or recommendation to speak for itself —
+                   follow it with a short, plain-English reason it matters to THIS buyer.
+                   For example, don't just write "72% auction clearance"; write "72%
+                   auction clearance — meaning sellers currently have the upper hand, so
+                   be ready to move quickly on a property you like."
+                c. If a figure isn't backed by the Source Data, present it as a clearly
+                   reasonable estimate ("typically around...") rather than false
+                   precision — but always give one, so the report never reads as empty.
+
+                --- COMPILING INSTRUCTIONS ---
+                1. If the cover page (`<div class="page">`) is included above, populate its
+                   placeholders exactly: `{{ suburb }}`, `{{ postcode }}`, `{{ median_price }}`,
+                   `{{ clearance_rate }}`, `{{ dom }}`.
+                2. Every `<div class="page page-2">` page is a fully worked EXAMPLE for a
+                   fictional suburb ("Woolloomooloo") — it exists only to show structure,
+                   section order, tone, and level of numeric detail. Replace EVERY suburb
+                   name, statistic, percentage, chart data point/coordinate, list item, and
+                   sentence with real content for the ACTUAL target suburb and inputs above.
+                   Do not leave any "Woolloomooloo" facts or numbers in the output.
+                3. Where exact data isn't available, produce reasonable, internally
+                   consistent estimates (a bar's width % must match the number shown next
+                   to it; an SVG chart's polyline/circle coordinates must match its axis
+                   labels and endpoint text).
+                4. The "What's Nearby" amenity counts (cafés, supermarkets, parks, gyms,
+                   hospitals, transport stops) are never a single exact number — always
+                   give a plausible RANGE instead (e.g. "4–6", "38–45"), since these are
+                   estimates, not a verified count.
+                5. Keep the HTML tag structure, class names, and inline SVG structure
+                   exactly as given — only change text, numbers, and coordinate/width
+                   attributes. Do not add, remove, or reorder `<div class="page ...">` sections.
+                6. Return ONLY the page div(s) shown above, in the same order, rewritten
+                   with real data. Do NOT include `<!doctype html>`, `<html>`, `<head>`,
+                   `<style>`, `<body>` or `</body>`/`</html>` tags.
+                7. Do NOT wrap the code in markdown blocks like ````html```` or add any
+                   conversational intro/outro text. Output only raw HTML.
+                """
+
+            # Split the 8 pages into two independently-writable halves and generate
+            # them concurrently — this is the main lever on wall-clock time, since a
+            # single call previously had to both read and re-write the full ~13,000
+            # tokens of report HTML in one uninterrupted stream. Chunk A keeps every
+            # page that repeats a headline figure (median price, clearance rate,
+            # growth %, price history) in ONE call so those numbers stay internally
+            # consistent; Chunk B is the self-contained, non-financial half (lifestyle,
+            # community, schools, risk) and carries no dependency on Chunk A's numbers.
+            pages = split_into_pages(body_inner)
+            if len(pages) == 8:
+                chunk_a_pages = [pages[0], pages[1], pages[2], pages[7]]
+                chunk_b_pages = [pages[3], pages[4], pages[5], pages[6]]
+            else:
+                # Custom uploaded template with a different page count/shape —
+                # fall back to a single, unsplit call.
+                chunk_a_pages, chunk_b_pages = pages, []
+
+            chunk_a_prompt = build_prompt(
+                "".join(chunk_a_pages), "Cover, Suburb Snapshot, Growth Outlook, The Verdict"
+            )
+            chunk_b_prompt = (
+                build_prompt(
+                    "".join(chunk_b_pages),
+                    "Lifestyle & Amenities, Community Profile, Schools & Family Fit, Risk & Planning",
+                )
+                if chunk_b_pages
+                else None
+            )
+
+            loader_placeholder = start_loader(
+                "Claude is analyzing data and writing the report (two sections in parallel)…"
+                if chunk_b_prompt
+                else "Claude is analyzing data and populating report layout…"
+            )
             try:
-                # Request model completion
-                response = genai.GenerativeModel('gemini-2.5-flash').generate_content(full_prompt)
-                
-                # Store output in session state
-                clean_html = response.text.strip()
-                # Clean markdown code fences if model accidentally output them
-                if clean_html.startswith("```html"):
-                    clean_html = clean_html[7:]
-                if clean_html.endswith("```"):
-                    clean_html = clean_html[:-3]
-                clean_html = clean_html.strip()
-                
+                if chunk_b_prompt:
+                    with ThreadPoolExecutor(max_workers=2) as executor:
+                        future_a = executor.submit(generate_html_report, chunk_a_prompt)
+                        future_b = executor.submit(generate_html_report, chunk_b_prompt)
+                        generated_a = future_a.result()
+                        generated_b = future_b.result()
+
+                    # Chunk A comes back as [Cover, Snapshot, Growth, Verdict] — pull the
+                    # Verdict page back out so the final order is pages 1..8.
+                    a_split = split_into_pages(generated_a)
+                    if len(a_split) == 4:
+                        generated_body = "".join(a_split[:3]) + generated_b + a_split[3]
+                    else:
+                        # Model didn't preserve the exact page boundaries — fall back to
+                        # a best-effort concatenation rather than failing the report.
+                        generated_body = generated_a + generated_b
+                else:
+                    generated_body = generate_html_report(chunk_a_prompt)
+
+                # Each chunk only sees its own 3-4 pages, so a model asked to number
+                # a footer ("01", "02", ...) numbers it relative to what it was shown,
+                # not the final 8-page document — e.g. the Verdict page (last overall)
+                # can come back labelled "03" because it was the 3rd footer-bearing
+                # page inside chunk A. Renumber deterministically in final page order
+                # instead of trusting either chunk's own count.
+                footer_counter = {"n": 0}
+                def _renumber_footer(match):
+                    footer_counter["n"] += 1
+                    return f'<span class="p2-footer-page">{footer_counter["n"]:02d}</span>'
+                generated_body = re.sub(r'<span class="p2-footer-page">\d+</span>', _renumber_footer, generated_body)
+
+                # Stitch the (model-written) body back into the untouched, verbatim
+                # head/CSS and tail so the design can never be corrupted or truncated away.
+                clean_html = f"{head_html}\n{generated_body}\n{tail_html}" if head_html else generated_body
                 st.session_state.generated_report_html = clean_html
-                st.success("✅ Report generated successfully!")
+                st.success(" ✅ Report Generated Successfully")
+
             except Exception as e:
-                st.error(f"Failed to generate report from Gemini API: {e}")
+                st.error(f"Failed to generate report from Claude API: {e}")
             finally:
                 stop_loader(loader_placeholder)
 
@@ -884,10 +1025,10 @@ with tab_generate:
                     b64 = base64.b64encode(f.read()).decode("utf-8")
                 return f"data:{mime};base64,{b64}"
 
-            logo_uri = to_data_uri(os.path.join(script_dir, "LOGO.svg"), "image/svg+xml")
+            logo_uri = to_data_uri(os.path.join(script_dir, "LOGO.png"), "image/png")
             house_uri = to_data_uri(os.path.join(script_dir, "House.png"), "image/png")
 
-            html_code = html_code.replace('src="LOGO.svg"', f'src="{logo_uri}"')
+            html_code = html_code.replace('src="LOGO.png"', f'src="{logo_uri}"')
             html_code = html_code.replace('src="House.png"', f'src="{house_uri}"')
 
             async def get_pdf_bytes_playwright(html_text):
