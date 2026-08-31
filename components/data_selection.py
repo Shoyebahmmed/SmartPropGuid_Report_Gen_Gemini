@@ -5,6 +5,7 @@ import streamlit as st
 from components.config import SessionState, AppConfig
 from components.services import HtagService
 from components.ui_utils import UiHelper
+from components.variable_mapper import build_standardized_property_payload
 
 class DataSelectionComponent:
     def __init__(self, session: SessionState, config: AppConfig, htag_service: HtagService = None):
@@ -118,6 +119,14 @@ class DataSelectionComponent:
                                 property_type=api_prop_type
                             )
                             self.session.htag_data = htag_result
+                            # Process and pretty-print 41 matched & extra variables to terminal
+                            build_standardized_property_payload(
+                                suburb=api_suburb,
+                                state=api_state,
+                                postcode=api_postcode,
+                                property_type=api_prop_type,
+                                raw_api_data=htag_result
+                            )
                             st.success(f"✅ Successfully retrieved HTAG analysis for {api_suburb}!")
                         except Exception as e:
                             st.error(f"❌ Failed to fetch from HTAG API: {e}")
