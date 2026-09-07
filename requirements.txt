@@ -1,6 +1,11 @@
 streamlit
 python-dotenv
 google-generativeai
+anthropic
+requests
 pandas
-xhtml2pdf
 openpyxl
+playwright
+jinja2
+pypdf
+json_repair
