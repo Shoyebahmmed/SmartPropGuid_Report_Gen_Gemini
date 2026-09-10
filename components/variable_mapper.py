@@ -47,8 +47,15 @@ MATCHED_VARIABLES_TEMPLATE: Dict[str, Any] = {
 }
 
 
-def _clean_number(val: Any) -> Optional[float]:
-    """Helper to convert string/int/float numbers (e.g. '$1,200,000', '4.5%', '0.042', '35 days') to float/int."""
+def clean_number(val: Any) -> Optional[float]:
+    """
+    Convert string/int/float numbers (e.g. '$1,200,000', '4.5%', '0.042', '35 days')
+    to float/int, or None if it can't be parsed as a number at all.
+
+    Public/shared on purpose: report_sanitizer.py reuses this same parser so
+    that a value coming from the raw HTAG/CSV payload and a value coming back
+    from the AI's generated JSON are cleaned up the exact same way.
+    """
     if val is None:
         return None
     if isinstance(val, (int, float)):
@@ -99,7 +106,7 @@ def build_standardized_property_payload(
         supply_demand = raw_api_data.get("supply_demand") or {}
 
         # 1. Price metrics
-        med_price = _clean_number(metrics.get("median_price") or raw_api_data.get("median_price"))
+        med_price = clean_number(metrics.get("median_price") or raw_api_data.get("median_price"))
         if med_price is not None:
             if is_unit:
                 matched["median_unit_price"] = med_price
@@ -108,81 +115,81 @@ def build_standardized_property_payload(
 
         # Explicit house vs unit prices if available
         if "median_house_price" in raw_api_data:
-            matched["median_house_price"] = _clean_number(raw_api_data.get("median_house_price"))
+            matched["median_house_price"] = clean_number(raw_api_data.get("median_house_price"))
         if "median_unit_price" in raw_api_data:
-            matched["median_unit_price"] = _clean_number(raw_api_data.get("median_unit_price"))
+            matched["median_unit_price"] = clean_number(raw_api_data.get("median_unit_price"))
 
         # Price growth (12m / 1y)
-        growth_1y = _clean_number(growth.get("1y") or raw_api_data.get("price_growth_12m") or raw_api_data.get("growth_12m"))
+        growth_1y = clean_number(growth.get("1y") or raw_api_data.get("price_growth_12m") or raw_api_data.get("growth_12m"))
         matched["price_growth_12m"] = growth_1y
 
         # Yield, Vacancy, Days on Market
-        matched["gross_yield"] = _clean_number(metrics.get("gross_yield") or raw_api_data.get("gross_yield"))
-        matched["vacancy_rate"] = _clean_number(
+        matched["gross_yield"] = clean_number(metrics.get("gross_yield") or raw_api_data.get("gross_yield"))
+        matched["vacancy_rate"] = clean_number(
             metrics.get("vacancy_rate") or supply_demand.get("vacancy_rate") or raw_api_data.get("vacancy_rate")
         )
-        matched["days_on_market"] = _clean_number(metrics.get("days_on_market") or raw_api_data.get("days_on_market"))
-        matched["clearance_rate"] = _clean_number(metrics.get("clearance_rate") or raw_api_data.get("clearance_rate"))
+        matched["days_on_market"] = clean_number(metrics.get("days_on_market") or raw_api_data.get("days_on_market"))
+        matched["clearance_rate"] = clean_number(metrics.get("clearance_rate") or raw_api_data.get("clearance_rate"))
 
         # Demand Supply Ratio (DSR / Score)
-        matched["demand_supply_ratio"] = _clean_number(
+        matched["demand_supply_ratio"] = clean_number(
             raw_api_data.get("demand_supply_ratio") or raw_api_data.get("dsr") or supply_demand.get("dsr")
         )
 
         # RCS Score / Liveability / Match score
-        rcs_overall = _clean_number(rcs.get("overall") or raw_api_data.get("rcs_score"))
+        rcs_overall = clean_number(rcs.get("overall") or raw_api_data.get("rcs_score"))
         if rcs_overall is not None:
             matched["liveability_score"] = rcs_overall
             matched["match_score"] = rcs_overall
 
         # Demographics
-        matched["population"] = _clean_number(demographics.get("population") or raw_api_data.get("population"))
-        matched["median_age"] = _clean_number(demographics.get("median_age") or raw_api_data.get("median_age"))
-        matched["median_household_income"] = _clean_number(
+        matched["population"] = clean_number(demographics.get("population") or raw_api_data.get("population"))
+        matched["median_age"] = clean_number(demographics.get("median_age") or raw_api_data.get("median_age"))
+        matched["median_household_income"] = clean_number(
             demographics.get("median_household_income") or demographics.get("income") or raw_api_data.get("median_household_income")
         )
-        matched["unemployment_rate"] = _clean_number(
+        matched["unemployment_rate"] = clean_number(
             demographics.get("unemployment_rate") or raw_api_data.get("unemployment_rate")
         )
         matched["top_household_type"] = demographics.get("top_household_type") or raw_api_data.get("top_household_type")
 
         # Dwelling types & tenures
-        matched["units_percentage"] = _clean_number(
+        matched["units_percentage"] = clean_number(
             demographics.get("units_percentage") or demographics.get("unit_pct") or raw_api_data.get("units_percentage")
         )
-        matched["houses_percentage"] = _clean_number(
+        matched["houses_percentage"] = clean_number(
             demographics.get("houses_percentage") or demographics.get("house_pct") or raw_api_data.get("houses_percentage")
         )
-        matched["owner_occupier_percentage"] = _clean_number(
+        matched["owner_occupier_percentage"] = clean_number(
             demographics.get("owner_occupier_percentage") or demographics.get("owner_pct") or raw_api_data.get("owner_occupier_percentage")
         )
-        matched["renter_percentage"] = _clean_number(
+        matched["renter_percentage"] = clean_number(
             demographics.get("renter_percentage") or demographics.get("renter_pct") or raw_api_data.get("renter_percentage")
         )
 
         # Walk, Transit, Bike scores
-        matched["walk_score"] = _clean_number(raw_api_data.get("walk_score"))
-        matched["transit_score"] = _clean_number(raw_api_data.get("transit_score"))
-        matched["bike_score"] = _clean_number(raw_api_data.get("bike_score"))
+        matched["walk_score"] = clean_number(raw_api_data.get("walk_score"))
+        matched["transit_score"] = clean_number(raw_api_data.get("transit_score"))
+        matched["bike_score"] = clean_number(raw_api_data.get("bike_score"))
 
         # Amenities
-        matched["cafe_count"] = _clean_number(raw_api_data.get("cafe_count"))
-        matched["supermarket_count"] = _clean_number(raw_api_data.get("supermarket_count"))
-        matched["green_space_count"] = _clean_number(raw_api_data.get("green_space_count"))
-        matched["gym_count"] = _clean_number(raw_api_data.get("gym_count"))
+        matched["cafe_count"] = clean_number(raw_api_data.get("cafe_count"))
+        matched["supermarket_count"] = clean_number(raw_api_data.get("supermarket_count"))
+        matched["green_space_count"] = clean_number(raw_api_data.get("green_space_count"))
+        matched["gym_count"] = clean_number(raw_api_data.get("gym_count"))
 
         # Schools & Risks
         matched["school_catchment_list"] = raw_api_data.get("school_catchment_list")
         matched["school_ranking_scores"] = raw_api_data.get("school_ranking_scores")
         matched["flood_risk_level"] = raw_api_data.get("flood_risk_level")
-        matched["crime_index_score"] = _clean_number(raw_api_data.get("crime_index_score"))
+        matched["crime_index_score"] = clean_number(raw_api_data.get("crime_index_score"))
 
         # Check for direct key matches if raw_api_data has any remaining matched variable keys
         for key in MATCHED_VARIABLES_TEMPLATE.keys():
             if matched[key] is None and key in raw_api_data and raw_api_data[key] is not None:
                 val = raw_api_data[key]
                 if isinstance(MATCHED_VARIABLES_TEMPLATE[key], (int, float)) or key.endswith(("_price", "_rate", "_score", "_percentage", "_count", "_income", "_age", "_yield", "_market", "_ratio", "_percentile", "population")):
-                    matched[key] = _clean_number(val)
+                    matched[key] = clean_number(val)
                 else:
                     matched[key] = val
 

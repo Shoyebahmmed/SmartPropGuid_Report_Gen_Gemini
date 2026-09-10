@@ -1,11 +1,6 @@
-import webbrowser
-from jinja2 import debug
-from google.ai.generativelanguage_v1beta.services.cache_service import pagers
-from pypdf import pagerange
 import os
 import datetime
 import openpyxl
-import re
 import json
 import asyncio
 import base64
@@ -13,7 +8,7 @@ from io import BytesIO
 import pandas as pd
 import google.generativeai as genai
 from copy import copy
-from jinja2 import Environment, BaseLoader, StrictUndefined, Undefined
+from jinja2 import Environment, BaseLoader, Undefined
 from playwright.async_api import async_playwright
 from pypdf import PdfReader, PdfWriter
 from components.config import AppConfig
@@ -22,8 +17,8 @@ class ExcelService:
     def __init__(self, config: AppConfig):
         self.config = config
 
-    def save_submission(self, full_name: str, phone: str, email: str, 
-                        property_type: str, suburb_input: str, 
+    def save_submission(self, full_name: str, phone: str, email: str,
+                        property_type: str, suburb: str, postcode: str, state: str,
                         budget: str, intention: str, priorities_yes_no: list) -> str:
         excel_path = self.config.excel_path
         if not os.path.exists(excel_path):
@@ -49,23 +44,13 @@ class ExcelService:
         else:
             next_id = "SPG-001"
             
-        # Parse Suburb, Postcode, and State
-        suburb_clean, postcode_clean, state_clean = "", "", ""
-        if suburb_input:
-            postcode_match = re.search(r"\b\d{3,4}\b", suburb_input)
-            postcode_clean = postcode_match.group(0) if postcode_match else ""
-            
-            state_match = re.search(r"\b(VIC|NSW|QLD|WA|SA|TAS|ACT|NT)\b", suburb_input, re.IGNORECASE)
-            state_clean = state_match.group(0).upper() if state_match else ""
-            
-            suburb_clean = suburb_input
-            if postcode_clean:
-                suburb_clean = suburb_clean.replace(postcode_clean, "")
-            if state_clean:
-                suburb_clean = re.sub(rf"\b{state_clean}\b", "", suburb_clean, flags=re.IGNORECASE)
-                
-            suburb_clean = re.sub(r"[,\-\s]+", " ", suburb_clean).strip()
-            
+        # Suburb, postcode, and state now come in as their own dedicated
+        # Customer Preferences form fields, so no more regex-splitting a
+        # single combined string is needed here.
+        suburb_clean = (suburb or "").strip()
+        postcode_clean = (postcode or "").strip()
+        state_clean = (state or "").strip().upper()
+
         next_row = last_row + 1
         date_submitted = datetime.date.today().strftime("%d/%m/%Y")
         

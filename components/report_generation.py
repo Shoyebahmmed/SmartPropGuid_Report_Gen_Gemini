@@ -1,11 +1,11 @@
 import datetime
 import json
-import re
 import streamlit as st
 from components.config import SessionState, AppConfig
 from components.services import DataService, GeminiService, AnthropicService, HtagService, PdfService, TemplateService
 from components.ui_utils import UiHelper
 from components.variable_mapper import build_standardized_property_payload
+from components.report_sanitizer import sanitize_report_data
 
 class ReportGenerationComponent:
     def __init__(self, session: SessionState, config: AppConfig, 
@@ -98,29 +98,28 @@ class ReportGenerationComponent:
             elif not is_anthropic and not self.config.api_key:
                 st.error("❌ Cannot generate report: GEMINI_API_KEY is missing. Please add it to your Cred.env file.")
                 return
+            elif not suburb.strip():
+                st.error("❌ Cannot generate report: please fill in the Suburb field on the '1. Customer Preferences' tab first.")
+                return
 
-            # Extract postcode & state from suburb string
-            postcode_str = ""
-            state_str = ""
-            suburb_clean = suburb
-            if suburb:
-                pm = re.search(r"\b\d{3,4}\b", suburb.strip())
-                postcode_str = pm.group(0) if pm else ""
-                
-                sm = re.search(r"\b(VIC|NSW|QLD|WA|SA|TAS|ACT|NT)\b", suburb.strip(), re.IGNORECASE)
-                state_str = sm.group(0).upper() if sm else ""
-                
-                if postcode_str:
-                    suburb_clean = suburb_clean.replace(postcode_str, "")
-                if state_str:
-                    suburb_clean = re.sub(rf"\b{state_str}\b", "", suburb_clean, flags=re.IGNORECASE)
-                suburb_clean = re.sub(r"[,\-\s]+", " ", suburb_clean).strip()
+            # Suburb, postcode, and state are now captured as their own fields
+            # on the Customer Preferences form (Step 1), so no more regex
+            # guesswork is needed to split them back out of one free-text box.
+            suburb_clean = suburb.strip()
+            postcode_str = st.session_state.get("postcode", "").strip()
+            state_str = st.session_state.get("state", "").strip().upper()
 
             loader_placeholder = UiHelper.start_loader(f"{self.session.ai_provider} is analyzing suburb data and composing report...", self.session.theme)
             
             try:
                 listings_records = []
                 extra_context = {}
+                # Deterministic, Python-counted match total (not AI-guessed) --
+                # only meaningful in file-upload mode, where "matching listings"
+                # is a real concept. Left None in HTAG mode, which the title
+                # page's `{% if property_match_count is defined %}` uses to
+                # skip the banner entirely for suburb-level HTAG reports.
+                property_match_count = None
 
                 # Branch by Data Source Mode
                 is_htag_mode = "HTAG" in self.session.data_source_mode
@@ -163,6 +162,9 @@ class ReportGenerationComponent:
                             budget, 
                             property_type
                         )
+
+                    if df_filtered is not None:
+                        property_match_count = len(df_filtered)
 
                     if df_filtered is not None and len(df_filtered) > 0:
                         for _, r in df_filtered.iterrows():
@@ -212,6 +214,11 @@ You are the primary AI Engine for SmartPropGuide. Your task is to process a pre-
    - If a standard key in `matched_variables` is `null` or missing, inspect `extra_variables` to see if the missing value can be logically derived, estimated, or calculated (e.g., deriving averages, medians, or ranges from min/max metrics, counts, or related fields available in `extra_variables`).
    - If a missing value CANNOT be derived from `extra_variables`, leave or output it as `null` / unavailable. Do not make up replacement values.
 
+2b. FLAGGING A WHOLE SECTION AS UNAVAILABLE:
+   - Every section object listed in <required_json_schema> below (snapshot, affordability, rental, budget, growth, infrastructure, price_history, lifestyle, community, schools, risk, verdict) MAY additionally include "data_available": false and a short "unavailable_reason" string when you genuinely cannot ground that section in the input data at all -- even after checking `extra_variables` per rule 2.
+   - Only set "data_available": false when the section would otherwise be empty or invented; if you have real data for at least part of the section, set "data_available": true (or omit the key -- it defaults to true) and fill in what you do have.
+   - Do not worry about leaving lists empty or fields blank when data is genuinely missing -- a downstream sanitizer fills in safe, clearly-labelled placeholders for anything you leave out, so there is no need to invent plausible-looking numbers just to fill a field.
+
 3. DYNAMIC EXTRA DATA UTILIZATION:
    - Incorporate any remaining relevant data points from `extra_variables` into the appropriate report narrative or text blocks (e.g., adding unique infrastructure, zoning, or amenity insights).
 
@@ -222,7 +229,7 @@ You are the primary AI Engine for SmartPropGuide. Your task is to process a pre-
 </processing_rules>
 
 <required_json_schema>
-Return a single JSON object with EXACTLY these top-level keys matching the report template requirements:
+Return a single JSON object with EXACTLY these top-level keys matching the report template requirements. Every object-typed section below (not the bare lists "amenities"/"day_in_life") may also carry the optional "data_available"/"unavailable_reason" pair described in rule 2b:
 "median_price" (string formatted e.g. "$1,658,000" or derived from matched_variables), "clearance_rate" (string e.g. "68%"), "days_on_market" (string e.g. "34 days"),
 "snapshot" (object: match_score int, stats list of {{value, label, highlight (boolean true or false)}}, summary string),
 "affordability" (object: summary string, stats list of {{value,label}}, trends list of {{label,value,direction: up|down|neutral}}),
@@ -248,17 +255,19 @@ Return a single JSON object with EXACTLY these top-level keys matching the repor
                 else:
                     report_data = self.gemini_service.generate_report_data(full_prompt)
 
-                # Ensure snapshot highlight flag defaults safely
-                snapshot = report_data.get("snapshot", {})
-                if isinstance(snapshot, dict):
-                    for stat in snapshot.get("stats", []):
-                        if isinstance(stat, dict):
-                            stat.setdefault("highlight", False)
+                # Repair the AI's JSON before it ever reaches the template: guarantees
+                # every field the template loops/does chart math over exists with a
+                # safe type, and flags any section that came back materially empty
+                # with data_available=False so data_notice() shows an honest banner
+                # instead of the render crashing or a chart drawing off bad data.
+                report_data = sanitize_report_data(report_data)
 
                 # Set verified deterministic fields
                 report_data["suburb"] = suburb_clean or report_data.get("suburb", suburb)
                 report_data["postcode"] = postcode_str or report_data.get("postcode", "")
                 report_data["state_display"] = state_str if state_str else "AUSTRALIA"
+                if property_match_count is not None:
+                    report_data["property_match_count"] = property_match_count
 
                 # Render HTML with Jinja2 template
                 report_html = self.template_service.render(self.session.template_content, report_data)

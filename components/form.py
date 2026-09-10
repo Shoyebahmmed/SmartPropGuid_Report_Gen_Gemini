@@ -50,10 +50,16 @@ class FormComponent:
             
             st.text_input(
                 "Which suburb or area are you interested in?",
-                placeholder="e.g. Richmond, VIC 3121 or 2000",
+                placeholder="e.g. Richmond",
                 key="suburb"
             )
-            
+
+            loc_col1, loc_col2 = st.columns(2)
+            with loc_col1:
+                st.text_input("Postcode", placeholder="e.g. 3121", key="postcode")
+            with loc_col2:
+                st.text_input("State", placeholder="e.g. VIC", key="state")
+
             st.selectbox(
                 "What is your budget?",
                 options=["Under $500k", "$500k–$800k", "$800k–$1.2M", "Above $1.2M"],
@@ -96,9 +102,11 @@ class FormComponent:
                 full_name = st.session_state.get("full_name", "").strip()
                 phone = st.session_state.get("phone", "").strip()
                 email = st.session_state.get("email", "").strip()
-                suburb_input = st.session_state.get("suburb", "").strip()
-                
-                if not full_name or not phone or not email or not suburb_input:
+                suburb_val = st.session_state.get("suburb", "").strip()
+                postcode_val = st.session_state.get("postcode", "").strip()
+                state_val = st.session_state.get("state", "").strip().upper()
+
+                if not full_name or not phone or not email or not suburb_val:
                     st.error("❌ Full Name, Phone Number, Email Address, and Suburb/Area are required fields.")
                 else:
                     try:
@@ -107,14 +115,16 @@ class FormComponent:
                         for i in range(len(self.priorities_list)):
                             val = "Yes" if st.session_state.get(f"priority_{i}") else "No"
                             priorities_yes_no.append(val)
-                            
+
                         # Save via Excel Service
                         next_id = self.excel_service.save_submission(
                             full_name=full_name,
                             phone=phone,
                             email=email,
                             property_type=st.session_state.get("property_type", "House"),
-                            suburb_input=suburb_input,
+                            suburb=suburb_val,
+                            postcode=postcode_val,
+                            state=state_val,
                             budget=st.session_state.get("budget", ""),
                             intention=st.session_state.get("intention", ""),
                             priorities_yes_no=priorities_yes_no

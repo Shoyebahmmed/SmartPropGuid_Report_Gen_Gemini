@@ -1,5 +1,4 @@
 import os
-import re
 import pandas as pd
 import streamlit as st
 from components.config import SessionState, AppConfig
@@ -72,33 +71,23 @@ class DataSelectionComponent:
                 # Live HTAG API Integration
                 st.markdown(f"<p style='font-size:0.8rem; color:{text_muted}; margin-top:0.5rem;'>Fetch real-time institutional suburb intelligence from HTAG Analytics.</p>", unsafe_allow_html=True)
 
-                # Parse defaults from form state if available
-                suburb_state_val = st.session_state.get("suburb", "").strip()
+                # Suburb, state, and postcode are entered once on the Customer
+                # Preferences form (Step 1) and reused here -- shown read-only
+                # so operators don't have to retype the same location twice.
+                api_suburb = st.session_state.get("suburb", "").strip()
+                api_state = st.session_state.get("state", "").strip()
+                api_postcode = st.session_state.get("postcode", "").strip()
                 prop_type_val = st.session_state.get("property_type", "House")
 
-                postcode_default = ""
-                state_default = ""
-                suburb_name_default = suburb_state_val
-
-                if suburb_state_val:
-                    pc_match = re.search(r"\b\d{3,4}\b", suburb_state_val)
-                    if pc_match:
-                        postcode_default = pc_match.group(0)
-                        suburb_name_default = suburb_name_default.replace(postcode_default, "")
-
-                    st_match = re.search(r"\b(VIC|NSW|QLD|WA|SA|TAS|ACT|NT)\b", suburb_name_default, re.IGNORECASE)
-                    if st_match:
-                        state_default = st_match.group(0).upper()
-                        suburb_name_default = re.sub(rf"\b{state_default}\b", "", suburb_name_default, flags=re.IGNORECASE)
-
-                    suburb_name_default = re.sub(r"[,\-\s]+", " ", suburb_name_default).strip()
+                if not api_suburb:
+                    st.warning("⚠️ No suburb set yet. Go back to **1. Customer Preferences** and fill in the Suburb, State, and Postcode fields first.")
 
                 h_col1, h_col2 = st.columns(2)
                 with h_col1:
-                    api_suburb = st.text_input("Suburb Name", value=suburb_name_default or "Richmond", key="htag_input_suburb")
-                    api_state = st.text_input("State (optional)", value=state_default or "VIC", key="htag_input_state")
+                    st.text_input("Suburb Name", value=api_suburb or "Not set", disabled=True)
+                    st.text_input("State", value=api_state or "Not set", disabled=True)
                 with h_col2:
-                    api_postcode = st.text_input("Postcode (optional)", value=postcode_default or "3121", key="htag_input_postcode")
+                    st.text_input("Postcode", value=api_postcode or "Not set", disabled=True)
                     api_prop_type = st.selectbox(
                         "Property Type",
                         options=["House", "Unit", "Townhouse", "Land"],
@@ -108,7 +97,7 @@ class DataSelectionComponent:
 
                 if st.button("⚡ Fetch Suburb Data from HTAG API", use_container_width=True, type="secondary"):
                     if not api_suburb:
-                        st.error("Please enter a Suburb Name to fetch analysis from HTAG.")
+                        st.error("Please fill in the Suburb field on the Customer Preferences tab before fetching from HTAG.")
                     else:
                         loader = UiHelper.start_loader("Connecting to HTAG Suburb Intelligence Agent...", self.session.theme)
                         try:

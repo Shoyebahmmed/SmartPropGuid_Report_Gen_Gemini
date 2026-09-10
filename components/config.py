@@ -52,6 +52,8 @@ class SessionState:
         "email": "",
         "property_type": "House",
         "suburb": "",
+        "postcode": "",
+        "state": "",
         "budget": "Under $500k",
         "intention": "Live in",
     }
