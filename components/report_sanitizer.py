@@ -1,7 +1,7 @@
 """
 Defensive post-processing for the AI-generated report JSON.
 
-Gemini/Claude are asked (see report_generation.py's prompt) to return one big
+Claude is asked (see report_generation.py's prompt) to return one big
 JSON object matching the report schema, but an LLM response is never 100%
 guaranteed to match it: a whole section key can be omitted, a list can come
 back empty, a number can arrive as `null`, a string like "N/A", or be missing
@@ -322,12 +322,42 @@ def _sanitize_lifestyle(raw: Any) -> Dict[str, Any]:
     return section
 
 
+# Fixed set of "What's Nearby" categories, in the order the template renders
+# them. The template picks an icon per category (see nearby_icon() macro in
+# sample_template.html), so this list is the single source of truth both the
+# prompt and the sanitizer must stay in sync with.
+NEARBY_CATEGORIES = [
+    "Transport", "Shopping & Retail", "Healthcare",
+    "Education", "Parks & Recreation", "Dining & Cafes",
+]
+
+
+# Cards are meant for a quick skim, not a paragraph -- capped independently
+# of the prompt's own instruction, since AI compliance with a length request
+# is never guaranteed and the card's whole point is to stay short.
+NEARBY_DESC_MAX_LEN = 55
+
+
+def _truncate_short(text: str, max_len: int = NEARBY_DESC_MAX_LEN) -> str:
+    text = text.strip()
+    if len(text) <= max_len:
+        return text
+    cut = text[:max_len].rsplit(" ", 1)[0].rstrip(",.;:-")
+    return (cut or text[:max_len]) + "…"
+
+
 def _sanitize_amenities(raw: Any) -> List[Dict[str, Any]]:
+    by_category = {}
+    for a in _dict_items(raw):
+        category = _str(a.get("category"))
+        matched = next((c for c in NEARBY_CATEGORIES if c.lower() == category.lower()), None)
+        if matched:
+            by_category[matched] = _truncate_short(_str(a.get("description")))
+
     return [{
-        "icon": _str(a.get("icon"), "📍"),
-        "count": _str(a.get("count"), "N/A"),
-        "label": _str(a.get("label"), "Amenity"),
-    } for a in _dict_items(raw)]
+        "category": category,
+        "description": by_category.get(category) or "Not available for this suburb yet.",
+    } for category in NEARBY_CATEGORIES]
 
 
 def _sanitize_day_in_life(raw: Any) -> List[Dict[str, Any]]:

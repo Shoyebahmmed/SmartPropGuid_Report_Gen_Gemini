@@ -6,7 +6,6 @@ import asyncio
 import base64
 from io import BytesIO
 import pandas as pd
-import google.generativeai as genai
 from copy import copy
 from jinja2 import Environment, BaseLoader, Undefined
 from playwright.async_api import async_playwright
@@ -149,41 +148,6 @@ class DataService:
         return None, None
 
 
-class GeminiService:
-    def __init__(self, config: AppConfig):
-        self.config = config
-
-    def generate_report_data(self, prompt: str) -> dict:
-        """
-        Asks Gemini for structured JSON content only (no HTML markup at all).
-        This dict is later merged into sample_template.html by TemplateService
-        using Jinja2 -- Gemini never sees or touches the HTML/CSS, so it can't
-        break layout, drop tags, or corrupt styling.
-        """
-        if not self.config.api_key:
-            raise ValueError("Gemini API key is missing. Please add it to your Cred.env file.")
-
-        model = genai.GenerativeModel(
-            'gemini-2.5-flash',
-            generation_config={"response_mime_type": "application/json"},
-        )
-        response = model.generate_content(prompt)
-
-        raw = response.text.strip()
-        # response_mime_type=application/json should return clean JSON, but
-        # strip markdown fences defensively in case the model still adds them.
-        if raw.startswith("```"):
-            raw = raw.split("```", 2)[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        raw = raw.strip().rstrip("`").strip()
-
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Gemini did not return valid JSON: {e}\n--- raw response ---\n{raw[:2000]}")
-
-
 class AnthropicService:
     def __init__(self, config: AppConfig):
         self.config = config
@@ -310,7 +274,7 @@ class TemplateService:
     Uses the lenient `Undefined` (not `StrictUndefined`): a missing key
     renders as blank instead of raising. This is intentional -- it's what
     lets the data_notice() macro and `{{ x | default(...) }}` fallbacks in
-    the template degrade gracefully when Gemini's JSON is missing a field,
+    the template degrade gracefully when the AI's JSON is missing a field,
     rather than crashing the whole report generation over one gap. Report
     Generation's own validation pass (report_generation.py) is what
     actually catches and flags missing/unavailable sections before they
@@ -347,14 +311,14 @@ class PdfService:
         return f"data:{mime};base64,{b64}"
 
     def prepare_html_assets(self, html_code: str) -> str:
-        logo_path = self.config.get_asset_path("LOGO.svg")
+        logo_path = self.config.get_asset_path("LOGO.png")
         house_path = self.config.get_asset_path("House.png")
-        
-        logo_uri = self.to_data_uri(logo_path, "image/svg+xml")
+
+        logo_uri = self.to_data_uri(logo_path, "image/png")
         house_uri = self.to_data_uri(house_path, "image/png")
-        
+
         if logo_uri:
-            html_code = html_code.replace('src="LOGO.svg"', f'src="{logo_uri}"')
+            html_code = html_code.replace('src="LOGO.png"', f'src="{logo_uri}"')
         if house_uri:
             html_code = html_code.replace('src="House.png"', f'src="{house_uri}"')
         return html_code
@@ -363,7 +327,7 @@ class PdfService:
         # This expects the report HTML to follow sample_template_fixed.html's
         # structure: one full-bleed title page as `<div class="page">`,
         # followed by all the content sections wrapped in a single
-        # `<div class="report-body">`. If the Gemini-filled HTML still uses
+        # `<div class="report-body">`. If the AI-filled HTML still uses
         # the old per-section "page page-2" wrapper, this split won't find
         # the right elements — swap the base template used by
         # ReportGenerationComponent (self.session.template_content) over to
@@ -375,7 +339,7 @@ class PdfService:
             try:
                 await title_page.set_content(html_text, wait_until="networkidle")
                 logo_uri = self.to_data_uri(
-                    self.config.get_asset_path("LOGO.svg"), "image/svg+xml"
+                    self.config.get_asset_path("LOGO.png"), "image/png"
                 )
 
                 HEADER_TEMPLATE = f"""

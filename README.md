@@ -17,14 +17,16 @@ The platform handles the manual collection workflow in a streamlined 3-step pipe
 * Captures explicit user property criteria: target location/postcode, property layouts, exact budget distributions, and intention parameters (Owner-Occupier vs. Investor).
 * Evaluates secondary priority weights using an interactive grid checklist mapping core environmental and lifestyle metrics (e.g., school boundaries, public transit access, proximity to the CBD, flood and bushfire risks).
 
-### 📂 2. Data & Template Upload
+### 📂 2. Data Source Configuration
 * **Source Data Integration**: Supports both direct manual file uploads (`.csv`, `.xlsx`, `.xls`) and real-time automated data pulling via the **HTAG Suburb Analysis API** (`https://agent.htagai.com/micro-agents/agents/suburb-analysis/execute`).
-* **Report Layout Pre-sets**: Injects customized HTML template files dynamically. Falls back automatically to the standard enterprise `sample_template.html` template when an alternative layout isn't loaded.
+* **Fixed Report Layout**: Every report renders through the same standard enterprise `sample_template.html` template -- it isn't user-selectable, keeping output consistent across operators.
 * **Operational Control Layer**: Provides custom directive text fields for operators to tell the AI model exactly what to prioritize during generation (e.g., target capital growth trajectories or transit vectors).
 
 ### ✨ 3. AI Report Generation & Compilation
-* Leverages dual AI engine support: choose between **Google Gemini (`gemini-2.5-flash`)** and **Anthropic Claude (`claude-sonnet-4-6`)** via an interactive selector.
+* Powered by **Anthropic Claude** (model configurable via `CLAUDE_MODEL`, defaults to `claude-sonnet-4-6`).
 * Dynamically parses textual data streams, processes structured listings rows, maps scores, and handles real-time HTML string rendering.
+* **Graceful Data Fallbacks**: a defensive sanitization pass (`report_sanitizer.py`) guarantees every chart, stat card, and icon-based "What's Nearby" panel renders safely even when the AI or source data leaves a gap -- missing sections show an honest "data unavailable" notice instead of a broken layout or an invented number.
+* **Real-Time Generation Feedback**: a full-screen progress overlay tracks the actual pipeline stages (data prep → AI analysis → report assembly → PDF compilation) rather than a generic spinner, so the percentage shown always reflects genuine progress.
 * Seamlessly compiles raw HTML code into professional, portable documents using `playwright` for local download.
 
 ---
@@ -43,33 +45,36 @@ SmartPropGuid_Report_Gen_Gemini/
     ├── __init__.py             # Package initializer
     ├── config.py               # AppConfig & SessionState class wrappers
     ├── ui_utils.py             # UI elements helper & CSS styles injection
-    ├── services.py             # ExcelService, DataService, GeminiService, AnthropicService, HtagService, TemplateService, PdfService
+    ├── services.py             # ExcelService, DataService, AnthropicService, HtagService, TemplateService, PdfService
+    ├── report_sanitizer.py     # Defensive repair of the AI's JSON before it hits the template
+    ├── variable_mapper.py      # Standardizes raw HTAG/CSV data into the 41-variable payload
     ├── form.py                 # Customer Preferences form component UI
-    ├── data_selection.py       # Data preview, HTAG API fetcher, and template uploader component UI
+    ├── data_selection.py       # Data source selection & HTAG API fetcher component UI
     └── report_generation.py    # AI report generator and PDF download component UI
 ```
 
 Each module has a single responsibility:
 - **`App`**: Sets up page properties, custom styling, and routes the navigation tabs to components.
-- **`AppConfig`**: Resolves local resources paths, sets environment setups, and loads API keys for Gemini, Anthropic, and HTAG.
+- **`AppConfig`**: Resolves local resources paths, sets environment setups, and loads API keys for Anthropic and HTAG.
 - **`SessionState`**: Encapsulates properties in Streamlit state parameters.
-- **`UiHelper`**: Separates loading spinner animations and injecting dark/light theme CSS properties.
+- **`UiHelper`**: Renders the stage-driven generation progress overlay and injects the dark/light theme CSS properties.
 - **`ExcelService`**: Appends customer intake sheet submissions safely.
 - **`DataService`**: Manages filtering operations and autoloads postcode datasets.
-- **`GeminiService`**: Interacts with Google Gemini AI for structured JSON report generation.
 - **`AnthropicService`**: Interacts with Anthropic Claude for structured JSON report generation.
 - **`HtagService`**: Connects to the HTAG Micro-Agent Suburb Analysis API to fetch live real estate metrics.
 - **`TemplateService`**: Jinja2 rendering engine that safely merges JSON report content into HTML templates.
 - **`PdfService`**: Executes a headless browser process to print the HTML report as a high-fidelity PDF.
+- **`report_sanitizer`**: Guarantees every field the template touches exists with a safe type and flags materially empty sections, so missing AI data degrades to an honest notice instead of a broken render.
 
 ---
 
 ## 🎨 Enterprise UI Design System
 
-The application implements a custom dual-theme architecture supporting high-contrast Dark and Light view modes:
-* **Dark Mode**: Sleek zinc-palette aesthetics optimized for extended night usage.
-* **Light Mode**: Reconfigured typography, card elements, and form label bindings to lock text colors to rich high-contrast tones, ensuring readability.
+The application implements a custom dual-theme architecture supporting high-contrast Dark and Light view modes, built on the same navy/gold/cream brand palette extracted from `LOGO.png` and shared with the PDF report itself:
+* **Dark Mode**: Deep navy surfaces (matching the report's cover page) with warm cream text and a gold accent.
+* **Light Mode**: Warm off-white surfaces with navy text, reconfigured typography, card elements, and form label bindings to lock text colors to rich high-contrast tones, ensuring readability.
 * **Layout Isolation**: Default stream headers, toolbars, and branding footprints are isolated via deep CSS injections to deliver a branded interface.
+* **Consistent Iconography**: the "What's Nearby" panel and report header use hand-drawn inline SVG icons and the real logo image instead of emoji, so the visual language stays consistent between the web app and the exported PDF.
 
 ---
 
@@ -80,12 +85,14 @@ This roadmap outlines the past milestones, current active sprints, and upcoming 
 | Phase | Milestone | Status |
 | :--- | :--- | :--- |
 | **Phase 1: Foundation** | UI/UX Core Architecture & Frontend Framework | ✅ Done |
-| | Integration of Gemini API Pipeline | ✅ Done |
+| | Integration of Anthropic Claude API Pipeline | ✅ Done |
 | | Report Generation PDF Export Module | ✅ Done |
 | **Phase 2: Validation** | Backend Data Sync: Excel Intake Form | ✅ Done |
 | | OOP Structure Refactoring | ✅ Done |
 | | User Acceptance Testing (UAT) | 🚧 Sprinted / Local Verification Pending |
-| **Phase 3: Optimization** | Template Dynamic Styling Modules | ⏳ Pending |
+| **Phase 3: Optimization** | Data Reliability & Graceful Fallback Handling | ✅ Done |
+| | Brand-Consistent UI & Report Redesign (logo, color palette, icons) | ✅ Done |
+| | Real-Time Generation Progress Feedback | ✅ Done |
 | | Automated Email Delivery System | ⏳ Pending |
 
 ---
@@ -93,7 +100,7 @@ This roadmap outlines the past milestones, current active sprints, and upcoming 
 ## 🚀 Execution & Setup
 
 ### Prerequisites
-Ensure your local environment is running Python 3.9+ and contains an active Gemini API credential key.
+Ensure your local environment is running Python 3.9+ and contains an active Anthropic API credential key.
 
 ### Installation
 1. Clone the repository:
@@ -114,9 +121,9 @@ Ensure your local environment is running Python 3.9+ and contains an active Gemi
    pip install -r requirements.txt
    ```
 4. Set up credentials:
-   Create a `Cred.env` file in the root directory and add your Gemini API key:
+   Create a `Cred.env` file in the root directory and add your Anthropic API key:
    ```env
-   GEMINI_API_KEY=your_gemini_api_key_here
+   ANTHROPIC_API_KEY=your_anthropic_api_key_here
    ```
 5. Run the application:
    ```bash

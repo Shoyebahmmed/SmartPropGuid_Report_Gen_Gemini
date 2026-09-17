@@ -2,20 +2,19 @@ import datetime
 import json
 import streamlit as st
 from components.config import SessionState, AppConfig
-from components.services import DataService, GeminiService, AnthropicService, HtagService, PdfService, TemplateService
+from components.services import DataService, AnthropicService, HtagService, PdfService, TemplateService
 from components.ui_utils import UiHelper
 from components.variable_mapper import build_standardized_property_payload
 from components.report_sanitizer import sanitize_report_data
 
 class ReportGenerationComponent:
-    def __init__(self, session: SessionState, config: AppConfig, 
-                 data_service: DataService, gemini_service: GeminiService, 
+    def __init__(self, session: SessionState, config: AppConfig,
+                 data_service: DataService,
                  anthropic_service: AnthropicService, htag_service: HtagService,
                  pdf_service: PdfService, template_service: TemplateService):
         self.session = session
         self.config = config
         self.data_service = data_service
-        self.gemini_service = gemini_service
         self.anthropic_service = anthropic_service
         self.htag_service = htag_service
         self.pdf_service = pdf_service
@@ -49,28 +48,22 @@ class ReportGenerationComponent:
             if st.session_state.get(f"priority_{i}"):
                 selected_priorities.append(priority)
 
-        # AI Provider Selection Card
+        # AI Engine info + Active Data Source Card
+        ai_model_label = f"Anthropic Claude ({self.config.claude_model})"
         st.markdown('<div class="zinc-card">', unsafe_allow_html=True)
         prov_col1, prov_col2 = st.columns([2, 1])
-        
+
         with prov_col1:
             st.markdown("<h4>AI Engine & Generation Settings</h4>", unsafe_allow_html=True)
-            provider_choice = st.radio(
-                "Select Generative AI Model Provider:",
-                options=["Google Gemini (gemini-2.5-flash)", f"Anthropic Claude ({self.config.claude_model})"],
-                index=0 if "Gemini" in self.session.ai_provider else 1,
-                horizontal=True,
-                key="ai_provider_radio"
-            )
-            self.session.ai_provider = "Google Gemini" if "Gemini" in provider_choice else "Anthropic Claude"
-            
+            st.info(f"Reports are generated using **{ai_model_label}**.")
+
         with prov_col2:
             st.markdown("<h4>Active Data Source</h4>", unsafe_allow_html=True)
             st.info(f"Using: **{self.session.data_source_mode}**")
         st.markdown('</div>', unsafe_allow_html=True)
 
         # UI Layout: Settings Summary Card & Generation Button
-        bg_subtle = "#0c0c0f" if self.session.theme == "dark" else "#f9fafb"
+        bg_subtle = UiHelper.get_bg_subtle_color(self.session.theme)
         border_color = UiHelper.get_border_color(self.session.theme)
         
         sum_col1, sum_col2 = st.columns([3, 1])
@@ -80,8 +73,8 @@ class ReportGenerationComponent:
                 <strong>Target Area:</strong> {suburb if suburb else "Not specified"} | 
                 <strong>Property Type:</strong> {property_type} | 
                 <strong>Budget:</strong> {budget} | 
-                <strong>Purpose:</strong> {intention} | 
-                <strong>AI Model:</strong> {self.session.ai_provider}<br>
+                <strong>Purpose:</strong> {intention} |
+                <strong>AI Model:</strong> {ai_model_label}<br>
                 <strong>Key Preferences Selected:</strong> {', '.join(selected_priorities) if selected_priorities else "None"}
             </div>
             """, unsafe_allow_html=True)
@@ -90,13 +83,9 @@ class ReportGenerationComponent:
             generate_btn = st.button("✨ Generate AI Report", type="primary", use_container_width=True)
 
         if generate_btn:
-            # Check API keys before execution
-            is_anthropic = "Anthropic" in self.session.ai_provider
-            if is_anthropic and not self.config.anthropic_api_key:
+            # Check API key before execution
+            if not self.config.anthropic_api_key:
                 st.error("❌ Cannot generate report: ANTHROPIC_API_KEY is missing. Please add it to your Cred.env file.")
-                return
-            elif not is_anthropic and not self.config.api_key:
-                st.error("❌ Cannot generate report: GEMINI_API_KEY is missing. Please add it to your Cred.env file.")
                 return
             elif not suburb.strip():
                 st.error("❌ Cannot generate report: please fill in the Suburb field on the '1. Customer Preferences' tab first.")
@@ -109,7 +98,7 @@ class ReportGenerationComponent:
             postcode_str = st.session_state.get("postcode", "").strip()
             state_str = st.session_state.get("state", "").strip().upper()
 
-            loader_placeholder = UiHelper.start_loader(f"{self.session.ai_provider} is analyzing suburb data and composing report...", self.session.theme)
+            loader_placeholder = UiHelper.start_loader("Preparing suburb data...", self.session.theme, percent=8)
             
             try:
                 listings_records = []
@@ -184,6 +173,12 @@ class ReportGenerationComponent:
                     extra_context=extra_context
                 )
 
+                UiHelper.update_loader(
+                    loader_placeholder,
+                    f"{ai_model_label} is analyzing suburb data and composing your report...",
+                    20, self.session.theme
+                )
+
                 # Assemble prompt asking AI for STRUCTURED JSON ONLY
                 full_prompt = f"""<system_prompt>
 <role>
@@ -239,7 +234,7 @@ Return a single JSON object with EXACTLY these top-level keys matching the repor
 "infrastructure" (object: summary string, entries list of {{year,title,tag_type: transport|amenity|community,tag_label,status_type: active|planned,status_label,value}}),
 "price_history" (object: y_axis_labels list of 4 strings low-to-high, points list of ~7 {{year,value (numeric, in millions)}}, legend list of {{color,label}}),
 "lifestyle" (object: summary string, scores list of {{value 0-100,label,sublabel,color}}),
-"amenities" (list of {{icon (single emoji),count,label}}),
+"amenities" (list of EXACTLY 6 objects, one per category in this exact order: "Transport", "Shopping & Retail", "Healthcare", "Education", "Parks & Recreation", "Dining & Cafes" -- each object: {{category (one of those 6 exact strings), description (a SHORT skimmable phrase, under 8 words / 50 characters, naming just the single most relevant specific nearby fact -- e.g. "Richmond Station, 5 min walk" or "Bridge Road shopping strip" -- NOT a full sentence or paragraph, grounded in matched_variables/extra_variables)}}),
 "day_in_life" (list of {{time,text}}),
 "community" (object: summary string, stats list of {{value,label}}, age_distribution list of {{label,value 0-100,dark bool}}, owner_vs_renter list of exactly 2 {{value 0-100,label,color}}, household_composition list of {{label,value 0-100,dark bool}}, type_summary string),
 "schools" (object: pending_notice string or empty, summary string, list of {{type,name,distance,score 0-100}}, family_fit list of {{label,value 0-100,dark bool}}, verdict string),
@@ -249,11 +244,9 @@ Return a single JSON object with EXACTLY these top-level keys matching the repor
 </required_json_schema>
 </system_prompt>"""
 
-                # Execute with selected AI Service
-                if is_anthropic:
-                    report_data = self.anthropic_service.generate_report_data(full_prompt)
-                else:
-                    report_data = self.gemini_service.generate_report_data(full_prompt)
+                report_data = self.anthropic_service.generate_report_data(full_prompt)
+
+                UiHelper.update_loader(loader_placeholder, "Structuring your report...", 75, self.session.theme)
 
                 # Repair the AI's JSON before it ever reaches the template: guarantees
                 # every field the template loops/does chart math over exists with a
@@ -269,10 +262,31 @@ Return a single JSON object with EXACTLY these top-level keys matching the repor
                 if property_match_count is not None:
                     report_data["property_match_count"] = property_match_count
 
-                # Render HTML with Jinja2 template
-                report_html = self.template_service.render(self.session.template_content, report_data)
+                # Render HTML with Jinja2 template -- always the fixed default
+                # template; operators can no longer swap it out, so there's no
+                # session-stored template content to read here anymore.
+                template_path = self.config.get_asset_path("sample_template.html")
+                with open(template_path, "r", encoding="utf-8") as f:
+                    template_source = f.read()
+                report_html = self.template_service.render(template_source, report_data)
                 self.session.generated_report_html = report_html
-                st.success(f"✅ Report generated successfully using {self.session.ai_provider}!")
+
+                # Compile the PDF now, still inside the loader's span, and cache
+                # it in session state. Previously this ran *after* the loader had
+                # already stopped (in the block below, on every single rerun),
+                # which is exactly the few-second "stall" after the spinner
+                # disappears that Playwright's headless-Chromium PDF pass causes --
+                # now the loader covers the whole pipeline, and the PDF is only
+                # ever regenerated when a new report is actually produced.
+                UiHelper.update_loader(loader_placeholder, "Compiling your PDF report...", 88, self.session.theme)
+                self.session.generated_pdf_bytes = None
+                try:
+                    self.session.generated_pdf_bytes = self.pdf_service.convert_html_to_pdf(report_html)
+                except Exception as pdf_err:
+                    st.warning(f"⚠️ Report generated, but PDF compilation failed: {pdf_err}")
+
+                UiHelper.update_loader(loader_placeholder, "Done!", 100, self.session.theme)
+                st.success(f"✅ Report generated successfully using {ai_model_label}!")
 
             except Exception as e:
                 st.error(f"❌ Failed to generate report: {e}")
@@ -283,22 +297,23 @@ Return a single JSON object with EXACTLY these top-level keys matching the repor
         if self.session.generated_report_html:
             st.markdown("### Generated Report Preview")
             html_code = self.session.generated_report_html
+            pdf_bytes = self.session.generated_pdf_bytes
 
-            try:
-                pdf_bytes = self.pdf_service.convert_html_to_pdf(html_code)
-                if pdf_bytes:
-                    clean_suburb_name = suburb.replace(' ', '_') if suburb else 'Property'
-                    st.download_button(
-                        label="📥 Download PDF Report",
-                        data=pdf_bytes,
-                        file_name=f"SmartPropGuid_Report_{clean_suburb_name}.pdf",
-                        mime="application/pdf",
-                        use_container_width=True
-                    )
-                else:
-                    st.error("Could not compile HTML to PDF. Check if the HTML template format has errors.")
-            except Exception as e:
-                st.error(f"Error compiling HTML to PDF: {e}")
+            if pdf_bytes:
+                clean_suburb_name = suburb.replace(' ', '_') if suburb else 'Property'
+                st.download_button(
+                    label="📥 Download PDF Report",
+                    data=pdf_bytes,
+                    file_name=f"SmartPropGuid_Report_{clean_suburb_name}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+            else:
+                st.error("Could not compile HTML to PDF. Check if the HTML template format has errors.")
 
-            # Embed iframe HTML preview on screen
-            st.components.v1.html(html_code, height=700, scrolling=True)
+            # Embed iframe HTML preview on screen -- same asset-embedding pass
+            # PdfService applies before printing, so the logo/house image
+            # resolve here too instead of showing as broken image icons
+            # (a relative "src=LOGO.png" has no route to resolve inside an
+            # iframe's srcdoc, so it always needs to become a data URI).
+            st.components.v1.html(self.pdf_service.prepare_html_assets(html_code), height=700, scrolling=True)

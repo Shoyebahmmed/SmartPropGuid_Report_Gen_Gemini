@@ -1,5 +1,4 @@
 import os
-import google.generativeai as genai
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -19,15 +18,6 @@ class AppConfig:
             load_dotenv(cred_path, override=True)
         elif os.path.exists(env_path):
             load_dotenv(env_path, override=True)
-
-        # Initialize Gemini API if key is present
-        api_key = self.api_key
-        if api_key:
-            genai.configure(api_key=api_key)
-
-    @property
-    def api_key(self) -> str:
-        return os.environ.get("GEMINI_API_KEY", "")
 
     @property
     def anthropic_api_key(self) -> str:
@@ -62,9 +52,6 @@ class SessionState:
         if "theme" not in st.session_state:
             st.session_state.theme = "dark"
 
-        if "ai_provider" not in st.session_state:
-            st.session_state.ai_provider = "Google Gemini"
-
         if "data_source_mode" not in st.session_state:
             st.session_state.data_source_mode = "📁 Upload Data File (CSV / Excel)"
 
@@ -74,11 +61,11 @@ class SessionState:
         if "generated_report_html" not in st.session_state:
             st.session_state.generated_report_html = None
 
+        if "generated_pdf_bytes" not in st.session_state:
+            st.session_state.generated_pdf_bytes = None
+
         if "df_data" not in st.session_state:
             st.session_state.df_data = None
-
-        if "template_content" not in st.session_state:
-            st.session_state.template_content = ""
 
         # Form field defaults
         for k, v in self.FORM_DEFAULTS.items():
@@ -100,14 +87,6 @@ class SessionState:
 
     def toggle_theme(self):
         self.theme = "light" if self.theme == "dark" else "dark"
-
-    @property
-    def ai_provider(self) -> str:
-        return st.session_state.get("ai_provider", "Google Gemini")
-
-    @ai_provider.setter
-    def ai_provider(self, value: str):
-        st.session_state.ai_provider = value
 
     @property
     def data_source_mode(self) -> str:
@@ -134,20 +113,20 @@ class SessionState:
         st.session_state.generated_report_html = value
 
     @property
+    def generated_pdf_bytes(self):
+        return st.session_state.get("generated_pdf_bytes")
+
+    @generated_pdf_bytes.setter
+    def generated_pdf_bytes(self, value):
+        st.session_state.generated_pdf_bytes = value
+
+    @property
     def df_data(self):
         return st.session_state.get("df_data")
 
     @df_data.setter
     def df_data(self, value):
         st.session_state.df_data = value
-
-    @property
-    def template_content(self) -> str:
-        return st.session_state.get("template_content", "")
-
-    @template_content.setter
-    def template_content(self, value: str):
-        st.session_state.template_content = value
 
     def reset_form(self):
         for k in self.FORM_DEFAULTS.keys():

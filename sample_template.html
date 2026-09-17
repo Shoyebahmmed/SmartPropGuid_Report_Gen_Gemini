@@ -24,7 +24,13 @@
 
         body {
             size: A4 portrait;
-            background-color: #162338;
+            /* White, not the brand navy: the .page (title cover) and
+               .report-body/.report-section (content pages) each paint their
+               own explicit background over their full box, so this is only
+               ever visible in the leftover space below where content ends
+               on a page that isn't fully filled (typically the last page).
+               Navy here made that gap look like a stray footer band. */
+            background-color: #ffffff;
             display: flex;
             flex-direction: column;
             justify-content: flex-start;
@@ -212,7 +218,7 @@
         }
 
         .text-match-count-none {
-            color: rgba(255, 255, 255, 0.55);
+            color: rgba(255, 255, 255, 0.72);
         }
 
 
@@ -242,7 +248,7 @@
         .stat-key {
             font-size: 7pt;
             font-weight: 400;
-            color: rgba(255, 255, 255, 0.5);
+            color: rgba(255, 255, 255, 0.72);
             letter-spacing: 0.12em;
             text-transform: uppercase;
             margin-top: 2px;
@@ -281,7 +287,7 @@
 
         @media print {
             body {
-                background-color: #162338 !important;
+                background-color: #ffffff !important;
                 padding: 0 !important;
                 margin: 0 !important;
                 display: block !important;
@@ -325,7 +331,7 @@
             /* IMPORTANT: only put ATOMIC, bounded-size elements in this list —
                a single card/row/item that will always be short, regardless of
                what the AI model fills it with. Never put a *container* here
-               (a grid/list/group whose child count comes from Gemini output),
+               (a grid/list/group whose child count comes from the AI's output),
                because if that container ends up taller than one printable
                page, "avoid" has no legal page to place it on and Chromium
                just lets it run through the page boundary — which is what
@@ -372,7 +378,7 @@
             .c-school-meta,
             .c-school-score-wrap,
             .c-score-trio,
-            .c-amenity-card,
+            .c-nearby-card,
             .c-pro-item,
             .c-con-item,
             .c-comparable-pill {
@@ -389,7 +395,7 @@
                one page and overflowing past the margin when it can't. */
             .c-school-grid,
             .c-verdict-proscons,
-            .c-amenity-grid,
+            .c-nearby-grid,
             .c-comparable-row,
             .c-infra-list,
             .c-verdict-breakdown,
@@ -465,6 +471,7 @@
             color: #2c2c2c;
             line-height: 1.75;
             margin-bottom: 3mm;
+            text-align: justify;
         }
 
         .c-divider {
@@ -489,7 +496,7 @@
         }
 
         .c-stat-card-value {
-            font-family: 'Playfair Display', serif;
+            font-family: 'DM Sans', sans-serif;
             font-size: 14pt;
             font-weight: 700;
             color: #d7b35e;
@@ -500,7 +507,7 @@
             font-family: 'DM Sans', sans-serif;
             font-size: 6.5pt;
             font-weight: 400;
-            color: rgba(255, 255, 255, 0.5);
+            color: rgba(255, 255, 255, 0.72);
             letter-spacing: 0.1em;
             text-transform: uppercase;
             margin-top: 1.5mm;
@@ -540,7 +547,7 @@
         }
 
         .c-metric-value {
-            font-family: 'Playfair Display', serif;
+            font-family: 'DM Sans', sans-serif;
             font-size: 11pt;
             font-weight: 700;
             color: #162338;
@@ -605,7 +612,7 @@
         .c-table th {
             font-size: 6.5pt;
             font-weight: 500;
-            color: rgba(255, 255, 255, 0.6);
+            color: rgba(255, 255, 255, 0.72);
             letter-spacing: 0.1em;
             text-transform: uppercase;
             padding: 2.5mm 3mm;
@@ -677,7 +684,7 @@
         }
 
         .c-owner-renter-value {
-            font-family: 'Playfair Display', serif;
+            font-family: 'DM Sans', sans-serif;
             font-size: 20pt;
             font-weight: 700;
             color: #162338;
@@ -771,7 +778,7 @@
         }
 
         .c-snap-stat-value {
-            font-family: 'Playfair Display', serif;
+            font-family: 'DM Sans', sans-serif;
             font-size: 11pt;
             font-weight: 700;
             color: #162338;
@@ -792,6 +799,7 @@
             font-size: 8pt;
             color: #2c2c2c;
             line-height: 1.7;
+            text-align: justify;
             background-color: rgba(215, 179, 94, 0.07);
             border-left: 3px solid #d7b35e;
             padding: 3mm 4mm;
@@ -826,21 +834,21 @@
         }
 
         .c-trend-up {
-            font-family: 'Playfair Display', serif;
+            font-family: 'DM Sans', sans-serif;
             font-size: 10pt;
             font-weight: 700;
             color: #2e7d32;
         }
 
         .c-trend-down {
-            font-family: 'Playfair Display', serif;
+            font-family: 'DM Sans', sans-serif;
             font-size: 10pt;
             font-weight: 700;
             color: #c62828;
         }
 
         .c-trend-neutral {
-            font-family: 'Playfair Display', serif;
+            font-family: 'DM Sans', sans-serif;
             font-size: 10pt;
             font-weight: 700;
             color: #162338;
@@ -915,7 +923,7 @@
         }
 
         .c-budget-pill-val {
-            font-family: 'Playfair Display', serif;
+            font-family: 'DM Sans', sans-serif;
             font-size: 10pt;
             font-weight: 700;
             flex-shrink: 0;
@@ -951,14 +959,14 @@
         .c-growth-badge-label {
             font-family: 'DM Sans', sans-serif;
             font-size: 6pt;
-            color: rgba(255, 255, 255, 0.45);
+            color: rgba(255, 255, 255, 0.72);
             letter-spacing: 0.15em;
             text-transform: uppercase;
             margin-bottom: 2mm;
         }
 
         .c-growth-badge-value {
-            font-family: 'Playfair Display', serif;
+            font-family: 'DM Sans', sans-serif;
             font-size: 13pt;
             font-weight: 700;
             color: #d7b35e;
@@ -981,7 +989,7 @@
         }
 
         .c-growth-metric-value {
-            font-family: 'Playfair Display', serif;
+            font-family: 'DM Sans', sans-serif;
             font-size: 12pt;
             font-weight: 700;
             color: #162338;
@@ -1120,7 +1128,7 @@
         }
 
         .c-infra-value {
-            font-family: 'Playfair Display', serif;
+            font-family: 'DM Sans', sans-serif;
             font-size: 8pt;
             font-weight: 700;
             color: #d7b35e;
@@ -1158,7 +1166,7 @@
         }
 
         .c-score-plain-value {
-            font-family: 'Playfair Display', serif;
+            font-family: 'DM Sans', sans-serif;
             font-size: 22pt;
             font-weight: 700;
             color: #162338;
@@ -1191,43 +1199,62 @@
         }
 
 
-        .c-amenity-grid {
+        .c-nearby-sub {
+            font-family: 'DM Sans', sans-serif;
+            font-size: 8pt;
+            color: rgba(22, 35, 56, 0.5);
+            margin-top: -1.5mm;
+        }
+
+        .c-nearby-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
             gap: 3mm;
             margin-top: 3mm;
         }
 
-        .c-amenity-card {
-            background-color: #162338;
-            border-radius: 3px;
-            padding: 4mm 3mm;
-            text-align: center;
-            border-bottom: 2px solid #d7b35e;
+        .c-nearby-card {
+            display: flex;
+            align-items: center;
+            gap: 3mm;
+            background-color: #ffffff;
+            border: 1px solid rgba(22, 35, 56, 0.08);
+            border-top: 2px solid #d7b35e;
+            border-radius: 0 0 2px 2px;
+            padding: 3.5mm 3mm;
         }
 
-        .c-amenity-icon {
-            font-size: 16pt;
-            margin-bottom: 1.5mm;
-            line-height: 1;
+        .c-nearby-icon {
+            flex-shrink: 0;
+            width: 11mm;
+            height: 11mm;
+            border-radius: 50%;
+            background-color: rgba(215, 179, 94, 0.14);
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
-        .c-amenity-count {
+        .c-nearby-icon svg {
+            width: 5.5mm;
+            height: 5.5mm;
+            display: block;
+        }
+
+        .c-nearby-title {
             font-family: 'Playfair Display', serif;
-            font-size: 15pt;
+            font-size: 8.5pt;
             font-weight: 700;
-            color: #d7b35e;
-            line-height: 1.1;
+            color: #162338;
+            margin-bottom: 1mm;
+            line-height: 1.2;
         }
 
-        .c-amenity-label {
+        .c-nearby-desc {
             font-family: 'DM Sans', sans-serif;
-            font-size: 6pt;
-            color: rgba(255, 255, 255, 0.45);
-            letter-spacing: 0.1em;
-            text-transform: uppercase;
-            margin-top: 1mm;
-            line-height: 1.4;
+            font-size: 6.8pt;
+            color: rgba(22, 35, 56, 0.6);
+            line-height: 1.5;
         }
 
 
@@ -1267,6 +1294,7 @@
             font-size: 8pt;
             color: #2c2c2c;
             line-height: 1.65;
+            text-align: justify;
         }
 
 
@@ -1440,6 +1468,7 @@
             font-size: 7.5pt;
             color: rgba(22, 35, 56, 0.6);
             line-height: 1.55;
+            text-align: justify;
         }
 
         .c-risk-badge {
@@ -1474,6 +1503,7 @@
             font-size: 7pt;
             color: rgba(22, 35, 56, 0.4);
             line-height: 1.6;
+            text-align: justify;
             border: 1px solid rgba(22, 35, 56, 0.08);
             padding: 3mm 4mm;
             border-radius: 2px;
@@ -1536,7 +1566,7 @@
         }
 
         .c-subscore-val {
-            font-family: 'Playfair Display', serif;
+            font-family: 'DM Sans', sans-serif;
             font-size: 9pt;
             font-weight: 700;
             color: #162338;
@@ -1626,6 +1656,7 @@
             font-size: 8pt;
             color: rgba(255, 255, 255, 0.75);
             line-height: 1.65;
+            text-align: justify;
         }
 
         .c-comparable-row {
@@ -1662,7 +1693,7 @@
         }
 
         .c-comparable-price {
-            font-family: 'Playfair Display', serif;
+            font-family: 'DM Sans', sans-serif;
             font-size: 10pt;
             font-weight: 700;
             color: #d7b35e;
@@ -1688,7 +1719,7 @@
 
             html,
             body {
-                background-color: #162338 !important;
+                background-color: #ffffff !important;
                 padding: 0 !important;
                 margin: 0 !important;
                 display: block !important;
@@ -1766,7 +1797,7 @@
             stroke-dasharray="{{ '%.0f'|format(filled) }} {{ '%.0f'|format(circumference) }}" stroke-linecap="round"
             transform="rotate(-90 {{ size/2 }} {{ size/2 }})" />
         <text x="{{ size/2 }}" y="{{ size/2 - 5 }}" text-anchor="middle" font-size="{{ value_size }}" font-weight="700"
-            fill="#162338" font-family="Playfair Display, serif">{{ score }}</text>
+            fill="#162338" font-family="DM Sans, sans-serif">{{ score }}</text>
         {% if sub %}
         <text x="{{ size/2 }}" y="{{ size/2 + 15 }}" text-anchor="middle" font-size="{{ sub_size }}"
             fill="rgba(22,35,56,0.4)" font-family="DM Sans, sans-serif" letter-spacing="1">{{ sub }}</text>
@@ -1788,7 +1819,7 @@
             stroke-width="12" stroke-dasharray="{{ '%.0f'|format(filled) }} {{ '%.0f'|format(circumference) }}"
             stroke-linecap="butt" transform="rotate(-90 {{ size/2 }} {{ size/2 }})" />
         <text x="{{ size/2 }}" y="{{ size/2 - 3 }}" text-anchor="middle" font-size="10" font-weight="700" fill="#162338"
-            font-family="Playfair Display, serif">{{ percent_a }}%</text>
+            font-family="DM Sans, sans-serif">{{ percent_a }}%</text>
         <text x="{{ size/2 }}" y="{{ size/2 + 8 }}" text-anchor="middle" font-size="6" fill="rgba(22,35,56,0.5)"
             font-family="DM Sans, sans-serif">{{ label_a }}</text>
     </svg>
@@ -1846,12 +1877,49 @@
     </div>
     {% endmacro %}
 
+    {# Simple line icons for the "What's Nearby" cards -- one per fixed
+    category (see NEARBY_CATEGORIES in report_sanitizer.py). Inline SVG with
+    a hardcoded navy fill, matching how progress_ring/donut already embed
+    their own graphics directly in the template rather than as image assets. #}
+    {% macro nearby_icon(category) %}
+    {% if category == 'Transport' %}
+    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path fill="#162338"
+            d="M12 2c-4 0-7 .5-7 4v8.5A2.5 2.5 0 0 0 7.5 17L6 18.5v.5h12v-.5L16.5 17A2.5 2.5 0 0 0 19 14.5V6c0-3.5-3-4-7-4zM7.5 15A1.5 1.5 0 1 1 7.5 12a1.5 1.5 0 0 1 0 3zm9 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zM17 10H7V6.5C7 5.7 9.2 5 12 5s5 .7 5 1.5V10z" />
+    </svg>
+    {% elif category == 'Shopping & Retail' %}
+    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path fill="#162338"
+            d="M7 7V6a5 5 0 0 1 10 0v1h2.2c.5 0 .9.4 1 .9l1 11A2 2 0 0 1 19.2 21H4.8a2 2 0 0 1-2-2.1l1-11c0-.5.5-.9 1-.9H7zm2 0h6V6a3 3 0 0 0-6 0v1z" />
+    </svg>
+    {% elif category == 'Healthcare' %}
+    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path fill="#162338"
+            d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 5v3h3a1 1 0 1 1 0 2h-3v3a1 1 0 1 1-2 0v-3H8a1 1 0 1 1 0-2h3V7a1 1 0 1 1 2 0z" />
+    </svg>
+    {% elif category == 'Education' %}
+    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path fill="#162338"
+            d="M12 3 1 8.5 12 14l8-3.9V16h2V8.5L12 3zM5 11.3v4.4c0 2 3.1 3.6 7 3.6s7-1.6 7-3.6v-4.4l-7 3.4-7-3.4z" />
+    </svg>
+    {% elif category == 'Parks & Recreation' %}
+    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path fill="#162338" d="M12 2 7.5 9h2.2L6.5 14h3.6L7 19h10l-3.1-5h3.6l-3.2-5h2.2L12 2zM11 19v3h2v-3h-2z" />
+    </svg>
+    {% else %}
+    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path fill="#162338"
+            d="M6 2v7a2 2 0 0 0 1.5 1.9V21h1.5V10.9A2 2 0 0 0 10.5 9V2H9v6.5H8.5V2H7v6.5H6.5V2H6zm10.5 0c-1.4 0-2.5 2-2.5 4.5S15.1 11 16.5 11V21h1.5V2h-1.5z" />
+    </svg>
+    {% endif %}
+    {% endmacro %}
+
     {# ============================================================
     DATA-AVAILABILITY FALLBACK
     ------------------------------------------------------------
-    Every major section object in the JSON Gemini returns can carry two
+    Every major section object in the JSON the AI returns can carry two
     optional keys: "data_available" (bool, defaults to true if omitted)
-    and "unavailable_reason" (string). Gemini is instructed in the prompt
+    and "unavailable_reason" (string). Claude is instructed in the prompt
     (see report_generation.py) to set data_available=false rather than
     invent numbers when it has nothing real to ground a section in.
     This macro renders that as a visible, honest banner instead of the
@@ -1872,7 +1940,7 @@
     {% endmacro %}
 
     <div class="page">
-        <img class="logo" src="LOGO.svg" alt="Logo" />
+        <img class="logo" src="LOGO.png" alt="Logo" />
 
         <div class="block-image-wrapper">
             <img class="block-image" src="House.png" alt="House" />
@@ -2173,13 +2241,16 @@
                 <div class="c-section-header">
                     <h2 class="c-heading">What's Nearby</h2>
                     <div class="c-heading-line"></div>
+                    <p class="c-nearby-sub">Key places and facilities around {{ suburb }}.</p>
                 </div>
-                <div class="c-amenity-grid">
+                <div class="c-nearby-grid">
                     {% for a in amenities %}
-                    <div class="c-amenity-card">
-                        <div class="c-amenity-icon">{{ a.icon }}</div>
-                        <div class="c-amenity-count">{{ a.count }}</div>
-                        <div class="c-amenity-label">{{ a.label }}</div>
+                    <div class="c-nearby-card">
+                        <div class="c-nearby-icon">{{ nearby_icon(a.category) }}</div>
+                        <div>
+                            <div class="c-nearby-title">{{ a.category }}</div>
+                            <div class="c-nearby-desc">{{ a.description }}</div>
+                        </div>
                     </div>
                     {% endfor %}
                 </div>
