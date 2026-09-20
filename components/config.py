@@ -153,5 +153,10 @@ class SessionState:
         for k in self.FORM_DEFAULTS.keys():
             if k in st.session_state:
                 del st.session_state[k]
-        if "priorities_pills" in st.session_state:
-            del st.session_state["priorities_pills"]
+        for k in (
+            "priorities_pills",
+            "suburb_match_choice", "_suburb_match_map",
+            "postcode_match_choice", "_postcode_match_map",
+        ):
+            if k in st.session_state:
+                del st.session_state[k]
