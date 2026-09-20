@@ -1,11 +1,11 @@
 import datetime
 import json
-import re
 import streamlit as st
 from components.config import SessionState, AppConfig
-from components.services import DataService, GeminiService, AnthropicService, HtagService, PdfService, TemplateService
+from components.services import DataService, AnthropicService, HtagService, PdfService, TemplateService
 from components.ui_utils import UiHelper
 from components.variable_mapper import build_standardized_property_payload
+from components.report_sanitizer import sanitize_report_data
 
 AU_STATE_NAMES = {
     "NSW": "NEW SOUTH WALES",
@@ -21,8 +21,8 @@ AU_STATE_NAMES = {
 
 def _state_from_postcode(postcode_str):
     """Deterministic Australian postcode -> state abbreviation, per the
-    official postcode ranges. Used when the suburb field had a postcode but
-    no spelled-out state (e.g. "Mosman 2088")."""
+    official postcode ranges. Used as a fallback when the operator filled
+    in Postcode but left the State field blank."""
     try:
         pc = int(postcode_str)
     except (TypeError, ValueError):
@@ -47,19 +47,18 @@ def _state_from_postcode(postcode_str):
 
 
 class ReportGenerationComponent:
-    def __init__(self, session: SessionState, config: AppConfig, 
-                 data_service: DataService, gemini_service: GeminiService, 
+    def __init__(self, session: SessionState, config: AppConfig,
+                 data_service: DataService,
                  anthropic_service: AnthropicService, htag_service: HtagService,
                  pdf_service: PdfService, template_service: TemplateService):
         self.session = session
         self.config = config
         self.data_service = data_service
-        self.gemini_service = gemini_service
         self.anthropic_service = anthropic_service
         self.htag_service = htag_service
         self.pdf_service = pdf_service
         self.template_service = template_service
-        
+
         self.priorities_list = [
             "Good schools nearby",
             "Public transport access",
@@ -76,97 +75,85 @@ class ReportGenerationComponent:
 
     def render(self, custom_prompt: str):
         st.markdown("### Generate and Review Report")
-        
+
         # Fetch form values from session state
         suburb = st.session_state.get("suburb", "")
         property_type = st.session_state.get("property_type", "House")
         budget = st.session_state.get("budget", "")
         intention = st.session_state.get("intention", "")
-        
+
         selected_priorities = st.session_state.get("priorities_pills", []) or []
 
-        # AI Provider Selection Card
+        # AI Engine info + Active Data Source Card
+        ai_model_label = f"Anthropic Claude ({self.config.claude_model})"
         with st.container(border=True):
             prov_col1, prov_col2 = st.columns([2, 1])
 
             with prov_col1:
                 st.markdown("<h4>AI Engine & Generation Settings</h4>", unsafe_allow_html=True)
-                provider_choice = st.radio(
-                    "Select Generative AI Model Provider:",
-                    options=["Google Gemini (gemini-2.5-flash)", f"Anthropic Claude ({self.config.claude_model})"],
-                    index=0 if "Gemini" in self.session.ai_provider else 1,
-                    horizontal=True,
-                    key="ai_provider_radio"
-                )
-                self.session.ai_provider = "Google Gemini" if "Gemini" in provider_choice else "Anthropic Claude"
+                st.info(f"Reports are generated using **{ai_model_label}**.")
 
             with prov_col2:
                 st.markdown("<h4>Active Data Source</h4>", unsafe_allow_html=True)
                 st.info(f"Using: **{self.session.data_source_mode}**")
 
         # UI Layout: Settings Summary Card & Generation Button
-        bg_subtle = "#0c0c0f" if self.session.theme == "dark" else "#f9fafb"
+        bg_subtle = UiHelper.get_bg_subtle_color(self.session.theme)
         border_color = UiHelper.get_border_color(self.session.theme)
-        
+
         sum_col1, sum_col2 = st.columns([3, 1])
         with sum_col1:
             st.markdown(f"""
             <div style="background-color: {bg_subtle}; padding: 1rem; border-radius: 8px; border: 1px solid {border_color}; font-size: 0.88rem;">
-                <strong>Target Area:</strong> {suburb if suburb else "Not specified"} | 
-                <strong>Property Type:</strong> {property_type} | 
-                <strong>Budget:</strong> {budget} | 
-                <strong>Purpose:</strong> {intention} | 
-                <strong>AI Model:</strong> {self.session.ai_provider}<br>
+                <strong>Target Area:</strong> {suburb if suburb else "Not specified"} |
+                <strong>Property Type:</strong> {property_type} |
+                <strong>Budget:</strong> {budget} |
+                <strong>Purpose:</strong> {intention} |
+                <strong>AI Model:</strong> {ai_model_label}<br>
                 <strong>Key Preferences Selected:</strong> {', '.join(selected_priorities) if selected_priorities else "None"}
             </div>
             """, unsafe_allow_html=True)
-            
+
         with sum_col2:
             generate_btn = st.button("✨ Generate AI Report", type="primary", use_container_width=True)
 
         if generate_btn:
-            # Check API keys before execution
-            is_anthropic = "Anthropic" in self.session.ai_provider
-            if is_anthropic and not self.config.anthropic_api_key:
+            # Check API key before execution
+            if not self.config.anthropic_api_key:
                 st.error("❌ Cannot generate report: ANTHROPIC_API_KEY is missing. Please add it to your Cred.env file.")
                 return
-            elif not is_anthropic and not self.config.api_key:
-                st.error("❌ Cannot generate report: GEMINI_API_KEY is missing. Please add it to your Cred.env file.")
+            elif not suburb.strip():
+                st.error("❌ Cannot generate report: please fill in the Suburb field on the '1. Customer Preferences' tab first.")
                 return
 
-            # Extract postcode & state from suburb string
-            postcode_str = ""
-            state_str = ""
-            suburb_clean = suburb
-            if suburb:
-                pm = re.search(r"\b\d{3,4}\b", suburb.strip())
-                postcode_str = pm.group(0) if pm else ""
-                
-                sm = re.search(r"\b(VIC|NSW|QLD|WA|SA|TAS|ACT|NT)\b", suburb.strip(), re.IGNORECASE)
-                state_str = sm.group(0).upper() if sm else ""
-                
-                if postcode_str:
-                    suburb_clean = suburb_clean.replace(postcode_str, "")
-                if state_str:
-                    suburb_clean = re.sub(rf"\b{state_str}\b", "", suburb_clean, flags=re.IGNORECASE)
-                suburb_clean = re.sub(r"[,\-\s]+", " ", suburb_clean).strip().title()
+            # Suburb, postcode, and state are captured as their own fields on
+            # the Customer Preferences form (Step 1). Always Title Case the
+            # suburb for a clean cover-page look regardless of how the
+            # operator typed it, and -- if they left State blank but did
+            # fill in Postcode -- derive the state deterministically from
+            # the postcode range rather than leaving the cover page blank.
+            suburb_clean = suburb.strip().title()
+            postcode_str = st.session_state.get("postcode", "").strip()
+            state_str = st.session_state.get("state", "").strip().upper()
+            if not state_str and postcode_str:
+                state_str = _state_from_postcode(postcode_str)
 
-                # If the user gave a postcode but not a state abbreviation
-                # (e.g. "Mosman 2088"), derive the state deterministically
-                # from the postcode range rather than leaving it blank.
-                if not state_str and postcode_str:
-                    state_str = _state_from_postcode(postcode_str)
+            loader_placeholder = UiHelper.start_loader("Preparing suburb data...", self.session.theme, percent=8)
 
-            loader_placeholder = UiHelper.start_loader(f"{self.session.ai_provider} is analyzing suburb data and composing report...", self.session.theme)
-            
             try:
                 listings_records = []
                 extra_context = {}
+                # Deterministic, Python-counted match total (not AI-guessed) --
+                # only meaningful in file-upload mode, where "matching listings"
+                # is a real concept. Left None in HTAG mode, which the title
+                # page's `{% if property_match_count is defined %}` uses to
+                # skip the banner entirely for suburb-level HTAG reports.
+                property_match_count = None
 
                 # Branch by Data Source Mode
                 is_htag_mode = "HTAG" in self.session.data_source_mode
                 raw_api_payload = None
-                
+
                 if is_htag_mode:
                     # Retrieve or fetch HTAG data
                     htag_data = self.session.htag_data
@@ -199,11 +186,14 @@ class ReportGenerationComponent:
                     df_filtered = None
                     if df_active is not None:
                         df_filtered = self.data_service.filter_property_data(
-                            df_active, 
-                            postcode_str, 
-                            budget, 
+                            df_active,
+                            postcode_str,
+                            budget,
                             property_type
                         )
+
+                    if df_filtered is not None:
+                        property_match_count = len(df_filtered)
 
                     if df_filtered is not None and len(df_filtered) > 0:
                         for _, r in df_filtered.iterrows():
@@ -221,6 +211,12 @@ class ReportGenerationComponent:
                     property_type=property_type,
                     raw_api_data=raw_api_payload,
                     extra_context=extra_context
+                )
+
+                UiHelper.update_loader(
+                    loader_placeholder,
+                    f"{ai_model_label} is analyzing suburb data and composing your report...",
+                    20, self.session.theme
                 )
 
                 # Assemble prompt asking AI for STRUCTURED JSON ONLY
@@ -246,36 +242,26 @@ You are the primary AI Engine for SmartPropGuide. Your task is to process a pre-
 <processing_rules>
 1. GROUNDED, BUT NEVER EMPTY:
    - When a value is present in the input JSON payload (matched_variables or extra_variables),
-     use it exactly — never override real data with a guess.
+     use it exactly -- never override real data with a guess.
    - When a value is missing, you MUST still provide a realistic, well-reasoned estimate drawn
      from your own general knowledge of this suburb, its state, and comparable Australian
-     property markets — the way an experienced local buyer's agent would ballpark a figure for
+     property markets -- the way an experienced local buyer's agent would ballpark a figure for
      a client on the spot. Round to a sensible precision ("around $1.25M", not "$1,247,382") so
      an estimate never masquerades as a verified exact figure.
    - The client should almost never see a blank "Data unavailable" card for a standard metric
      (median price, clearance rate, days on market, rental yield, walk/transit score,
-     demographics, etc.) — that reads as the tool being broken, not as honesty. Only fall back
-     to null/unavailable for something genuinely unknowable that even a knowledgeable local
-     agent could not estimate.
+     demographics, etc.) -- that reads as the tool being broken, not as honesty. Reserve
+     "data_available": false (rule 2b) for the rare case where even a competent local-agent
+     estimate genuinely isn't possible -- not as a default whenever no live data is connected.
 
 2. MISSING DATA HANDLING & SMART INFERENCE:
-   - Check `matched_variables` first; use it exactly when present.
-   - If missing, inspect `extra_variables` to see if it can be logically derived or calculated
-     (e.g., deriving averages, medians, or ranges from min/max metrics, counts, or related
-     fields). The `research_output` / `htag_research_narrative` field, when present, is a
-     detailed markdown research report about this exact suburb — READ IT CAREFULLY and pull
-     real figures out of its prose (median rent, days on market, population, dwelling mix,
-     sales volume, IRSAD, etc.) rather than skimming past it; almost every "missing" standard
-     variable is usually stated in there in plain text.
-   - If it still can't be derived, estimate it yourself per rule 1 above rather than leaving it
-     null.
-   - If an ENTIRE section (snapshot, affordability, rental, budget, growth, infrastructure,
-     price_history, lifestyle, community, schools, risk, or verdict) is about something this
-     suburb genuinely doesn't have or that is impossible to even estimate (not merely "no live
-     data connected"), add `"data_available": false` and a one-sentence
-     `"unavailable_reason": "..."` to that section's object instead of guessing — the template
-     shows this as an honest banner. This should be rare; prefer a reasonable estimate over this
-     banner whenever a competent estimate is possible at all.
+   - Check `matched_variables` first.
+   - If a standard key in `matched_variables` is `null` or missing, inspect `extra_variables` to see if the missing value can be logically derived, estimated, or calculated (e.g., deriving averages, medians, or ranges from min/max metrics, counts, or related fields available in `extra_variables`). The `research_output` / `htag_research_narrative` field, when present, is a detailed markdown research report about this exact suburb -- READ IT CAREFULLY and pull real figures out of its prose (median rent, days on market, population, dwelling mix, sales volume, IRSAD, etc.) rather than skimming past it; almost every "missing" standard variable is usually stated in there in plain text.
+   - If a missing value still can't be derived from `extra_variables`, estimate it yourself per rule 1 above. Do not leave it null just because it wasn't handed to you directly.
+
+2b. FLAGGING A WHOLE SECTION AS UNAVAILABLE:
+   - Every section object listed in <required_json_schema> below (snapshot, affordability, rental, budget, growth, infrastructure, price_history, lifestyle, community, schools, risk, verdict) MAY additionally include "data_available": false and a short "unavailable_reason" string when the section is about something this suburb genuinely doesn't have, or that not even a knowledgeable local agent could estimate -- not merely "no live data was connected for this request".
+   - Prefer a reasonable estimate (rule 1) over this banner whenever a competent estimate is possible at all. A downstream sanitizer guarantees safe placeholder values for anything you do leave out, so use this flag deliberately, not as a shortcut.
 
 3. DYNAMIC EXTRA DATA UTILIZATION:
    - Incorporate any remaining relevant data points from `extra_variables` into the appropriate report narrative or text blocks (e.g., adding unique infrastructure, zoning, or amenity insights).
@@ -285,17 +271,17 @@ You are the primary AI Engine for SmartPropGuide. Your task is to process a pre-
    - Do NOT wrap in conversational intro/outro text, meta-commentary, or HTML markup.
    - Maintain an objective, professional, and analytical tone tailored to first-home buyers and property investors.
 
-5. WRITING STYLE — this report is read directly by the client (a home buyer), not another analyst:
+5. WRITING STYLE -- this report is read directly by the client (a home buyer), not another analyst:
    - Plain, warm, everyday English in every summary/text field. No investor jargon (e.g. avoid
      "yield compression", "capital velocity"), no unexplained acronyms.
-   - Never leave a number, score, or recommendation to speak for itself — every stat in a
+   - Never leave a number, score, or recommendation to speak for itself -- every stat in a
      summary/verdict/next_step field should be followed by a short, plain-English reason it
-     matters to THIS buyer (e.g. "72% auction clearance — meaning sellers currently have the
+     matters to THIS buyer (e.g. "72% auction clearance -- meaning sellers currently have the
      upper hand, so be ready to move quickly").
 </processing_rules>
 
 <required_json_schema>
-Return a single JSON object with EXACTLY these top-level keys matching the report template requirements:
+Return a single JSON object with EXACTLY these top-level keys matching the report template requirements. Every object-typed section below (not the bare lists "amenities"/"day_in_life") may also carry the optional "data_available"/"unavailable_reason" pair described in rule 2b:
 "median_price" (string formatted e.g. "$1,658,000" or derived from matched_variables), "clearance_rate" (string e.g. "68%"), "days_on_market" (string e.g. "34 days"),
 "snapshot" (object: match_score int, stats list of {{value, label, highlight (boolean true or false)}}, summary string),
 "affordability" (object: summary string, stats list of {{value,label}}, trends list of {{label,value,direction: up|down|neutral}}),
@@ -305,7 +291,7 @@ Return a single JSON object with EXACTLY these top-level keys matching the repor
 "infrastructure" (object: summary string, entries list of {{year,title,tag_type: transport|amenity|community,tag_label,status_type: active|planned,status_label,value}}),
 "price_history" (object: y_axis_labels list of 4 strings low-to-high, points list of ~7 {{year,value (numeric, in millions)}}, legend list of {{color,label}}),
 "lifestyle" (object: summary string, scores list of {{value 0-100,label,sublabel,color}}),
-"amenities" (list of {{icon (single emoji),count (a plausible RANGE string like "4-6", never a single exact number — these are estimates, not a verified count),label}}),
+"amenities" (list of EXACTLY 6 objects, one per category in this exact order: "Transport", "Shopping & Retail", "Healthcare", "Education", "Parks & Recreation", "Dining & Cafes" -- each object: {{category (one of those 6 exact strings), description (a SHORT skimmable phrase, under 8 words / 50 characters, naming just the single most relevant specific nearby fact -- e.g. "Richmond Station, 5 min walk" or "Bridge Road shopping strip" -- NOT a full sentence or paragraph, grounded in matched_variables/extra_variables)}}),
 "day_in_life" (list of {{time,text}}),
 "community" (object: summary string, stats list of {{value,label}}, age_distribution list of {{label,value 0-100,dark bool}}, owner_vs_renter list of exactly 2 {{value 0-100,label,color}}, household_composition list of {{label,value 0-100,dark bool}}, type_summary string),
 "schools" (object: pending_notice string or empty, summary string, list of {{type,name,distance,score 0-100}}, family_fit list of {{label,value 0-100,dark bool}}, verdict string),
@@ -315,32 +301,50 @@ Return a single JSON object with EXACTLY these top-level keys matching the repor
 </required_json_schema>
 </system_prompt>"""
 
-                # Execute with selected AI Service
-                if is_anthropic:
-                    report_data = self.anthropic_service.generate_report_data(full_prompt)
-                else:
-                    report_data = self.gemini_service.generate_report_data(full_prompt)
+                report_data = self.anthropic_service.generate_report_data(full_prompt)
 
-                # Ensure snapshot highlight flag defaults safely
-                snapshot = report_data.get("snapshot", {})
-                if isinstance(snapshot, dict):
-                    for stat in snapshot.get("stats", []):
-                        if isinstance(stat, dict):
-                            stat.setdefault("highlight", False)
+                UiHelper.update_loader(loader_placeholder, "Structuring your report...", 75, self.session.theme)
 
-                # Set verified deterministic fields — always Title Case the
-                # suburb, and always show a state + postcode on the cover
-                # page when we have any way to know them.
-                fallback_suburb = str(report_data.get("suburb") or suburb or "").strip()
-                report_data["suburb"] = (suburb_clean or fallback_suburb).title()
+                # Repair the AI's JSON before it ever reaches the template: guarantees
+                # every field the template loops/does chart math over exists with a
+                # safe type, and flags any section that came back materially empty
+                # with data_available=False so data_notice() shows an honest banner
+                # instead of the render crashing or a chart drawing off bad data.
+                report_data = sanitize_report_data(report_data)
+
+                # Set verified deterministic fields
+                report_data["suburb"] = suburb_clean or report_data.get("suburb", suburb)
                 report_data["postcode"] = postcode_str or str(report_data.get("postcode") or "").strip()
                 state_full = AU_STATE_NAMES.get(state_str, "")
                 report_data["state_display"] = f"{state_full}, AUSTRALIA" if state_full else "AUSTRALIA"
+                if property_match_count is not None:
+                    report_data["property_match_count"] = property_match_count
 
-                # Render HTML with Jinja2 template
-                report_html = self.template_service.render(self.session.template_content, report_data)
+                # Render HTML with Jinja2 template -- always the fixed default
+                # template; operators can no longer swap it out, so there's no
+                # session-stored template content to read here anymore.
+                template_path = self.config.get_asset_path("sample_template.html")
+                with open(template_path, "r", encoding="utf-8") as f:
+                    template_source = f.read()
+                report_html = self.template_service.render(template_source, report_data)
                 self.session.generated_report_html = report_html
-                st.success(f"✅ Report generated successfully using {self.session.ai_provider}!")
+
+                # Compile the PDF now, still inside the loader's span, and cache
+                # it in session state. Previously this ran *after* the loader had
+                # already stopped (in the block below, on every single rerun),
+                # which is exactly the few-second "stall" after the spinner
+                # disappears that Playwright's headless-Chromium PDF pass causes --
+                # now the loader covers the whole pipeline, and the PDF is only
+                # ever regenerated when a new report is actually produced.
+                UiHelper.update_loader(loader_placeholder, "Compiling your PDF report...", 88, self.session.theme)
+                self.session.generated_pdf_bytes = None
+                try:
+                    self.session.generated_pdf_bytes = self.pdf_service.convert_html_to_pdf(report_html)
+                except Exception as pdf_err:
+                    st.warning(f"⚠️ Report generated, but PDF compilation failed: {pdf_err}")
+
+                UiHelper.update_loader(loader_placeholder, "Done!", 100, self.session.theme)
+                st.success(f"✅ Report generated successfully using {ai_model_label}!")
 
             except Exception as e:
                 st.error(f"❌ Failed to generate report: {e}")
@@ -351,25 +355,23 @@ Return a single JSON object with EXACTLY these top-level keys matching the repor
         if self.session.generated_report_html:
             st.markdown("### Generated Report Preview")
             html_code = self.session.generated_report_html
+            pdf_bytes = self.session.generated_pdf_bytes
 
-            try:
-                pdf_bytes = self.pdf_service.convert_html_to_pdf(html_code)
-                if pdf_bytes:
-                    clean_suburb_name = suburb.replace(' ', '_') if suburb else 'Property'
-                    st.download_button(
-                        label="📥 Download PDF Report",
-                        data=pdf_bytes,
-                        file_name=f"SmartPropGuid_Report_{clean_suburb_name}.pdf",
-                        mime="application/pdf",
-                        use_container_width=True
-                    )
-                else:
-                    st.error("Could not compile HTML to PDF. Check if the HTML template format has errors.")
-            except Exception as e:
-                st.error(f"Error compiling HTML to PDF: {e}")
+            if pdf_bytes:
+                clean_suburb_name = suburb.replace(' ', '_') if suburb else 'Property'
+                st.download_button(
+                    label="📥 Download PDF Report",
+                    data=pdf_bytes,
+                    file_name=f"SmartPropGuid_Report_{clean_suburb_name}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+            else:
+                st.error("Could not compile HTML to PDF. Check if the HTML template format has errors.")
 
-            # Embed iframe HTML preview on screen — swap in the same base64
-            # logo/house image data the PDF gets, so the preview iframe (which
-            # can't resolve a plain "LOGO.png" relative path) isn't just a
-            # broken-image icon.
+            # Embed iframe HTML preview on screen -- same asset-embedding pass
+            # PdfService applies before printing, so the logo/house image
+            # resolve here too instead of showing as broken image icons
+            # (a relative "src=LOGO.png" has no route to resolve inside an
+            # iframe's srcdoc, so it always needs to become a data URI).
             st.components.v1.html(self.pdf_service.prepare_html_assets(html_code), height=700, scrolling=True)

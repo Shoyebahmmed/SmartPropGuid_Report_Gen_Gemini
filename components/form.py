@@ -49,9 +49,15 @@ class FormComponent:
 
                 st.text_input(
                     "Which suburb or area are you interested in?",
-                    placeholder="e.g. Richmond, VIC 3121 or 2000",
+                    placeholder="e.g. Richmond",
                     key="suburb"
                 )
+
+                loc_col1, loc_col2 = st.columns(2)
+                with loc_col1:
+                    st.text_input("Postcode", placeholder="e.g. 3121", key="postcode")
+                with loc_col2:
+                    st.text_input("State", placeholder="e.g. VIC", key="state")
 
                 st.selectbox(
                     "What is your budget?",
@@ -69,7 +75,7 @@ class FormComponent:
             with st.container(border=True):
                 st.markdown("<h4>Sub-regional Priorities & Preferences</h4>", unsafe_allow_html=True)
 
-                text_muted = "#71717a"
+                text_muted = "#9c9484"
                 st.markdown(f"<p style='font-size:0.85rem; color:{text_muted}; margin-bottom:10px;'>Tap to select the features that matter most:</p>", unsafe_allow_html=True)
 
                 # Toggle-chip multi-select (replaces the old 2-column checkbox grid)
@@ -96,9 +102,11 @@ class FormComponent:
                 full_name = st.session_state.get("full_name", "").strip()
                 phone = st.session_state.get("phone", "").strip()
                 email = st.session_state.get("email", "").strip()
-                suburb_input = st.session_state.get("suburb", "").strip()
+                suburb_val = st.session_state.get("suburb", "").strip()
+                postcode_val = st.session_state.get("postcode", "").strip()
+                state_val = st.session_state.get("state", "").strip().upper()
 
-                if not full_name or not phone or not email or not suburb_input:
+                if not full_name or not phone or not email or not suburb_val:
                     st.error("❌ Full Name, Phone Number, Email Address, and Suburb/Area are required fields.")
                 else:
                     try:
@@ -112,7 +120,9 @@ class FormComponent:
                             phone=phone,
                             email=email,
                             property_type=st.session_state.get("property_type", "House"),
-                            suburb_input=suburb_input,
+                            suburb=suburb_val,
+                            postcode=postcode_val,
+                            state=state_val,
                             budget=st.session_state.get("budget", ""),
                             intention=st.session_state.get("intention", ""),
                             priorities_yes_no=priorities_yes_no

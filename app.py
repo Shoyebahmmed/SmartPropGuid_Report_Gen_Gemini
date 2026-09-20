@@ -1,11 +1,8 @@
-import os
-import base64
 import streamlit as st
 from components.config import AppConfig, SessionState
 from components.services import (
     ExcelService,
     DataService,
-    GeminiService,
     AnthropicService,
     HtagService,
     PdfService,
@@ -21,19 +18,18 @@ class App:
         # 1. Config & Session Initializations
         self.config = AppConfig()
         self.config.load_env()
-        
+
         self.session = SessionState()
         self.session.initialize_defaults()
-        
+
         # 2. Service Initializations
         self.excel_service = ExcelService(self.config)
         self.data_service = DataService(self.config)
-        self.gemini_service = GeminiService(self.config)
         self.anthropic_service = AnthropicService(self.config)
         self.htag_service = HtagService(self.config)
         self.pdf_service = PdfService(self.config)
         self.template_service = TemplateService()
-        
+
         # 3. Component Initializations
         self.form_component = FormComponent(self.session, self.excel_service)
         self.data_selection_component = DataSelectionComponent(
@@ -45,7 +41,6 @@ class App:
             self.session,
             self.config,
             self.data_service,
-            self.gemini_service,
             self.anthropic_service,
             self.htag_service,
             self.pdf_service,
@@ -63,27 +58,23 @@ class App:
         
         # Injects custom theme styling
         UiHelper.inject_custom_css(self.session.theme)
-
-        # Header & Brand area — real logo mark (falls back to a text glyph if missing)
-        logo_path = self.config.get_asset_path("LOGO.png")
-        if os.path.exists(logo_path):
-            with open(logo_path, "rb") as f:
-                logo_html = f'<img src="data:image/png;base64,{base64.b64encode(f.read()).decode("utf-8")}" style="height:44px; width:44px; border-radius:10px; object-fit:cover;" alt="SmartPropGuid logo" />'
-        else:
-            logo_html = '<span class="brand-logo">◆</span>'
-
+        
+        # Header & Brand area
         head_left, head_right = st.columns([9, 2])
         with head_left:
+            logo_uri = UiHelper.get_logo_data_uri(self.config)
+            logo_img_tag = f'<img class="brand-logo-img" src="{logo_uri}" alt="SmartPropGuid logo" />' if logo_uri else ""
             st.markdown(f"""
             <div class="brand">
-                {logo_html}
+                {logo_img_tag}
                 <div>
-                    <span class="brand-title">SmartPropGuid Report Engine</span>
+                    <span class="brand-logo">SmartPropGuid</span>
+                    <span class="brand-title">Report Engine</span>
                     <div class="brand-subtitle">Pre-Sales Manual Compilation & AI Generation Tool</div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
-
+            
         with head_right:
             theme_label = "☀️ Light Mode" if self.session.theme == "dark" else "🌙 Dark Mode"
             st.button(theme_label, on_click=self.session.toggle_theme, use_container_width=True)
@@ -93,8 +84,8 @@ class App:
         
         # Tabs Navigation
         tab_preferences, tab_upload, tab_generate = st.tabs([
-            "📋 1. Customer Preferences", 
-            "📂 2. Data & Template Upload", 
+            "📋 1. Customer Preferences",
+            "📂 2. Data Source",
             "✨ 3. AI Report Generation"
         ])
         

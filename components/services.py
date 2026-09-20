@@ -1,19 +1,13 @@
-import webbrowser
-from jinja2 import debug
-from google.ai.generativelanguage_v1beta.services.cache_service import pagers
-from pypdf import pagerange
 import os
 import datetime
 import openpyxl
-import re
 import json
 import asyncio
 import base64
 from io import BytesIO
 import pandas as pd
-import google.generativeai as genai
 from copy import copy
-from jinja2 import Environment, BaseLoader, StrictUndefined, Undefined
+from jinja2 import Environment, BaseLoader, Undefined
 from playwright.async_api import async_playwright
 from pypdf import PdfReader, PdfWriter
 import json_repair
@@ -47,22 +41,22 @@ class ExcelService:
     def __init__(self, config: AppConfig):
         self.config = config
 
-    def save_submission(self, full_name: str, phone: str, email: str, 
-                        property_type: str, suburb_input: str, 
+    def save_submission(self, full_name: str, phone: str, email: str,
+                        property_type: str, suburb: str, postcode: str, state: str,
                         budget: str, intention: str, priorities_yes_no: list) -> str:
         excel_path = self.config.excel_path
         if not os.path.exists(excel_path):
             raise FileNotFoundError(f"Excel file not found: {excel_path}")
-            
+
         wb = openpyxl.load_workbook(excel_path)
         sheet = wb.active
-        
+
         # Find the last row with data in Column A (Submission ID)
         last_row = 3
         for r in range(4, sheet.max_row + 2):
             if sheet.cell(row=r, column=1).value is not None:
                 last_row = r
-                
+
         # Generate Submission ID
         last_id = sheet.cell(row=last_row, column=1).value
         if last_id and isinstance(last_id, str) and last_id.startswith("SPG-"):
@@ -73,27 +67,17 @@ class ExcelService:
                 next_id = "SPG-002"
         else:
             next_id = "SPG-001"
-            
-        # Parse Suburb, Postcode, and State
-        suburb_clean, postcode_clean, state_clean = "", "", ""
-        if suburb_input:
-            postcode_match = re.search(r"\b\d{3,4}\b", suburb_input)
-            postcode_clean = postcode_match.group(0) if postcode_match else ""
-            
-            state_match = re.search(r"\b(VIC|NSW|QLD|WA|SA|TAS|ACT|NT)\b", suburb_input, re.IGNORECASE)
-            state_clean = state_match.group(0).upper() if state_match else ""
-            
-            suburb_clean = suburb_input
-            if postcode_clean:
-                suburb_clean = suburb_clean.replace(postcode_clean, "")
-            if state_clean:
-                suburb_clean = re.sub(rf"\b{state_clean}\b", "", suburb_clean, flags=re.IGNORECASE)
-                
-            suburb_clean = re.sub(r"[,\-\s]+", " ", suburb_clean).strip()
-            
+
+        # Suburb, postcode, and state now come in as their own dedicated
+        # Customer Preferences form fields, so no more regex-splitting a
+        # single combined string is needed here.
+        suburb_clean = (suburb or "").strip()
+        postcode_clean = (postcode or "").strip()
+        state_clean = (state or "").strip().upper()
+
         next_row = last_row + 1
         date_submitted = datetime.date.today().strftime("%d/%m/%Y")
-        
+
         # Assemble row data (25 columns)
         row_values = [
             next_id,            # 1: Submission ID
@@ -112,7 +96,7 @@ class ExcelService:
         row_values.extend(priorities_yes_no)
         # Append remaining columns: Additional Notes (23), Report Status (24), Assigned To (25)
         row_values.extend(["", "Pending", "Shoyeb"])
-        
+
         # Write to the cells and copy style if last_row has styles
         for col_idx, val in enumerate(row_values, start=1):
             new_cell = sheet.cell(row=next_row, column=col_idx, value=val)
@@ -125,7 +109,7 @@ class ExcelService:
                     new_cell.number_format = copy(src_cell.number_format)
                     new_cell.protection = copy(src_cell.protection)
                     new_cell.alignment = copy(src_cell.alignment)
-                    
+
         wb.save(excel_path)
         return next_id
 
@@ -184,38 +168,6 @@ class DataService:
         except Exception as e:
             raise RuntimeError(f"Could not auto-load postcode dataset: {e}")
         return None, None
-
-
-class GeminiService:
-    def __init__(self, config: AppConfig):
-        self.config = config
-
-    def generate_report_data(self, prompt: str) -> dict:
-        """
-        Asks Gemini for structured JSON content only (no HTML markup at all).
-        This dict is later merged into sample_template.html by TemplateService
-        using Jinja2 -- Gemini never sees or touches the HTML/CSS, so it can't
-        break layout, drop tags, or corrupt styling.
-        """
-        if not self.config.api_key:
-            raise ValueError("Gemini API key is missing. Please add it to your Cred.env file.")
-
-        model = genai.GenerativeModel(
-            'gemini-2.5-flash',
-            generation_config={"response_mime_type": "application/json"},
-        )
-        response = model.generate_content(prompt)
-
-        raw = response.text.strip()
-        # response_mime_type=application/json should return clean JSON, but
-        # strip markdown fences defensively in case the model still adds them.
-        if raw.startswith("```"):
-            raw = raw.split("```", 2)[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        raw = raw.strip().rstrip("`").strip()
-
-        return _parse_llm_json(raw, "Gemini")
 
 
 class AnthropicService:
@@ -345,11 +297,12 @@ class TemplateService:
     Uses the lenient `Undefined` (not `StrictUndefined`): a missing key
     renders as blank instead of raising. This is intentional -- it's what
     lets the data_notice() macro and `{{ x | default(...) }}` fallbacks in
-    the template degrade gracefully when Gemini's JSON is missing a field,
+    the template degrade gracefully when the AI's JSON is missing a field,
     rather than crashing the whole report generation over one gap. Report
-    Generation's own validation pass (report_generation.py) is what
-    actually catches and flags missing/unavailable sections before they
-    ever reach this render step -- this class stays a "dumb" renderer.
+    Generation's own validation pass (report_generation.py, via
+    report_sanitizer.sanitize_report_data) is what actually catches and
+    flags missing/unavailable sections before they ever reach this render
+    step -- this class stays a "dumb" renderer.
     """
     def __init__(self):
         self._env = Environment(loader=BaseLoader(), undefined=Undefined, autoescape=False)
@@ -366,7 +319,7 @@ class PdfService:
     # clips them. Nudge these if the banner ever looks cramped/cut off.
     CONTENT_MARGIN_TOP = "14mm"
     CONTENT_MARGIN_BOTTOM = "14mm"
-    # Left/right stay at 0 — .report-section (in sample_template_fixed.html)
+    # Left/right stay at 0 — .report-section (in sample_template.html)
     # already carries its own consistent 12mm inset. Adding page-level
     # margin on top of that would reintroduce the double-margin bug.
     CONTENT_MARGIN_SIDE = "0mm"
@@ -398,8 +351,7 @@ class PdfService:
         # This expects the report HTML to follow sample_template.html's
         # structure: one full-bleed title page as `<div class="page">`,
         # followed by all the content sections wrapped in a single
-        # `<div class="report-body">`. A template using the old per-section
-        # "page page-2" wrapper won't split correctly here.
+        # `<div class="report-body">`.
         async with async_playwright() as p:
             browser = await p.chromium.launch()
             title_page = await browser.new_page()
@@ -505,7 +457,7 @@ class PdfService:
                                     </table>
                                 </div>
                         <script>
-                        
+
                         window.addEventListener('DOMContentLoaded', () => {
                             const el = document.querySelector('.pageNumber');
                             if (el) { el.textContent = el.textContent.padStart(2, '0'); }
@@ -560,7 +512,7 @@ class PdfService:
                     display_header_footer=False,
                 )
 
-                
+
 
                 # ============================================================
                 # CONTENT PAGES
