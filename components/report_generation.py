@@ -6,6 +6,7 @@ from components.services import DataService, AnthropicService, HtagService, PdfS
 from components.ui_utils import UiHelper
 from components.variable_mapper import build_standardized_property_payload
 from components.report_sanitizer import sanitize_report_data
+from components.osm_client import geocode_suburb, summarize_nearby
 
 AU_STATE_NAMES = {
     "NSW": "NEW SOUTH WALES",
@@ -203,6 +204,27 @@ class ReportGenerationComponent:
                             })
                         extra_context["manual_dataset_sample"] = df_filtered.head(10).to_dict(orient="records")
 
+                # Real, verified nearby places from OpenStreetMap (free, no
+                # API key) -- independent of the HTAG/CSV data source choice
+                # above, since it answers a different question (what's
+                # physically nearby, not suburb-level market stats). Geocode
+                # failing, the ArcGIS/Nominatim services being unreachable,
+                # or genuinely no OSM coverage for the area are all treated
+                # the same way: skip silently and let the AI fall back to
+                # its own estimate, per the prompt's rule 1 -- this must
+                # never block report generation.
+                UiHelper.update_loader(
+                    loader_placeholder, "Finding nearby places (OpenStreetMap)...", 14, self.session.theme
+                )
+                try:
+                    coords = geocode_suburb(suburb_clean, state_str, postcode_str)
+                    if coords:
+                        osm_summary = summarize_nearby(coords[0], coords[1])
+                        if osm_summary:
+                            extra_context["osm_nearby"] = osm_summary
+                except Exception:
+                    pass
+
                 # Structure incoming data into 41 standard matched_variables and extra_variables
                 standardized_payload = build_standardized_property_payload(
                     suburb=suburb_clean,
@@ -265,6 +287,16 @@ You are the primary AI Engine for SmartPropGuide. Your task is to process a pre-
 
 3. DYNAMIC EXTRA DATA UTILIZATION:
    - Incorporate any remaining relevant data points from `extra_variables` into the appropriate report narrative or text blocks (e.g., adding unique infrastructure, zoning, or amenity insights).
+   - `extra_variables.osm_nearby`, when present, is REAL, VERIFIED OpenStreetMap data for this
+     exact location -- not an estimate. It has a `radius_m` and a `layers` object keyed by
+     "shops", "medical", "pois", "landuse" (parks/reserves), each with a `count_within_radius`
+     and a `nearest` list of real named places with their actual `distance_m`. Prefer these real
+     names and distances over a generic invented example whenever they fit a category -- this is
+     exactly the kind of verified detail the "amenities" section (rule 2b's schema below) and the
+     lifestyle/infrastructure narrative should be grounded in. Map its "pois" entries with a
+     cafe/restaurant kind to Dining & Cafes, school/education kinds to Education,
+     bus/train/ferry/parking kinds to Transport, etc.; "shops" to Shopping & Retail; "medical" to
+     Healthcare; "landuse" parks/reserves to Parks & Recreation.
 
 4. OUTPUT INSTRUCTIONS:
    - Generate ONLY a single valid JSON object containing the required report data structure below.
