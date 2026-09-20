@@ -7,6 +7,7 @@ from components.ui_utils import UiHelper
 from components.variable_mapper import build_standardized_property_payload
 from components.report_sanitizer import sanitize_report_data
 from components.osm_client import geocode_suburb, summarize_nearby
+from components.abs_client import summarize_region_stats
 
 AU_STATE_NAMES = {
     "NSW": "NEW SOUTH WALES",
@@ -216,12 +217,31 @@ class ReportGenerationComponent:
                 UiHelper.update_loader(
                     loader_placeholder, "Finding nearby places (OpenStreetMap)...", 14, self.session.theme
                 )
+                coords = None
                 try:
                     coords = geocode_suburb(suburb_clean, state_str, postcode_str)
                     if coords:
                         osm_summary = summarize_nearby(coords[0], coords[1])
                         if osm_summary:
                             extra_context["osm_nearby"] = osm_summary
+                except Exception:
+                    pass
+
+                # Real ABS Census 2021 + population-trend stats for this
+                # suburb's actual LGA (resolved via ABS's own official
+                # boundaries, not name-matching) -- reuses the same
+                # geocoded coordinates from the OSM step above rather than
+                # geocoding twice. Same fail-soft contract as OSM: ABS being
+                # unreachable or the LGA having no published data just means
+                # this key is absent, never a blocked report.
+                UiHelper.update_loader(
+                    loader_placeholder, "Fetching regional statistics (ABS)...", 17, self.session.theme
+                )
+                try:
+                    if coords:
+                        abs_summary = summarize_region_stats(coords[0], coords[1])
+                        if abs_summary:
+                            extra_context["abs_stats"] = abs_summary
                 except Exception:
                     pass
 
@@ -297,6 +317,17 @@ You are the primary AI Engine for SmartPropGuide. Your task is to process a pre-
      cafe/restaurant kind to Dining & Cafes, school/education kinds to Education,
      bus/train/ferry/parking kinds to Transport, etc.; "shops" to Shopping & Retail; "medical" to
      Healthcare; "landuse" parks/reserves to Parks & Recreation.
+   - `extra_variables.abs_stats`, when present, is REAL, VERIFIED data from the Australian
+     Bureau of Statistics for this suburb's actual local government area -- not an estimate.
+     `abs_stats.region` names the LGA/SA2 it covers. `abs_stats.census_2021_medians` gives the
+     real 2021 Census median weekly personal/family/household income, median weekly rent, median
+     monthly mortgage repayment, median age, and average household size for that LGA --
+     prefer these exact figures over an invented estimate for the "affordability" and "rental"
+     sections whenever they fit (they may be a few years old, so if you use one, phrase it as a
+     Census-2021 figure rather than implying it's this month's price). `abs_stats.population`
+     gives the latest Estimated Resident Population plus real 1yr/5yr growth percentages for the
+     LGA -- use these for any population/growth claims in "growth" or "community" instead of
+     guessing.
 
 4. OUTPUT INSTRUCTIONS:
    - Generate ONLY a single valid JSON object containing the required report data structure below.
