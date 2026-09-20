@@ -155,8 +155,7 @@ class SessionState:
                 del st.session_state[k]
         for k in (
             "priorities_pills",
-            "suburb_match_choice", "_suburb_match_map",
-            "postcode_match_choice", "_postcode_match_map",
+            "suburb_picker", "postcode_picker",
         ):
             if k in st.session_state:
                 del st.session_state[k]

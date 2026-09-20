@@ -1,31 +1,36 @@
 import streamlit as st
 from components.config import SessionState, BUDGET_OPTIONS
 from components.services import ExcelService
-from components.au_locations import search_by_suburb, search_by_postcode
+from components.au_locations import all_options, label_for
 
 
-def _format_match(m):
-    return f"{m['suburb']}, {m['state']} {m['postcode']}"
+def _apply_location_pick(source_key, other_key):
+    """
+    Shared on_change handler for both the Suburb and Postcode dropdowns --
+    whichever one the operator just picked from, confirm Suburb/Postcode/
+    State from that real record, and mirror the same confirmed label onto
+    the OTHER dropdown too, so both boxes agree instead of one silently
+    going stale.
+    """
+    label = st.session_state.get(source_key)
+    if not label:
+        return
+    _, lookup = all_options()
+    match = lookup.get(label)
+    if not match:
+        return
+    st.session_state["suburb"] = match["suburb"]
+    st.session_state["postcode"] = match["postcode"]
+    st.session_state["state"] = match["state"]
+    st.session_state[other_key] = label
 
 
-def _apply_suburb_match():
-    choice = st.session_state.get("suburb_match_choice")
-    match = st.session_state.get("_suburb_match_map", {}).get(choice)
-    if match:
-        st.session_state["suburb"] = match["suburb"]
-        st.session_state["postcode"] = match["postcode"]
-        st.session_state["state"] = match["state"]
-    st.session_state["suburb_match_choice"] = None
+def _on_suburb_pick():
+    _apply_location_pick("suburb_picker", "postcode_picker")
 
 
-def _apply_postcode_match():
-    choice = st.session_state.get("postcode_match_choice")
-    match = st.session_state.get("_postcode_match_map", {}).get(choice)
-    if match:
-        st.session_state["suburb"] = match["suburb"]
-        st.session_state["postcode"] = match["postcode"]
-        st.session_state["state"] = match["state"]
-    st.session_state["postcode_match_choice"] = None
+def _on_postcode_pick():
+    _apply_location_pick("postcode_picker", "suburb_picker")
 
 
 class FormComponent:
@@ -45,49 +50,6 @@ class FormComponent:
             "Family friendly area",
             "Close to CBD"
         ]
-
-    def _render_match_picker(self, query, search_fn, match_map_key, picker_key, on_change):
-        """
-        Shows a small "confirm suburb/postcode" dropdown of real matches as
-        the operator types, sourced from components/au_locations.py (a
-        bundled, official Australia Post locality list -- not a live API
-        call, so it's instant). Picking one fills Suburb, Postcode and
-        State from that confirmed record via the on_change callback.
-
-        Skipped once the current Suburb/Postcode/State already exactly
-        matches one of the real candidates -- so the picker doesn't linger
-        after a selection has already been applied.
-        """
-        query = (query or "").strip()
-        if len(query) < 2:
-            return
-
-        matches = search_fn(query, limit=8)
-        if not matches:
-            return
-
-        current = (
-            st.session_state.get("suburb", "").strip().lower(),
-            st.session_state.get("postcode", "").strip(),
-            st.session_state.get("state", "").strip().upper(),
-        )
-        if any((m["suburb"].lower(), m["postcode"], m["state"]) == current for m in matches):
-            # The current Suburb/Postcode/State already exactly matches one
-            # of the real candidates -- already confirmed, even if other
-            # (different, equally real) suburbs also match what was typed.
-            return
-
-        options = [_format_match(m) for m in matches]
-        st.session_state[match_map_key] = dict(zip(options, matches))
-        st.selectbox(
-            "Confirm match",
-            options=options,
-            index=None,
-            placeholder="Select to confirm & auto-fill the other fields",
-            label_visibility="collapsed",
-            key=picker_key,
-            on_change=on_change,
-        )
 
     def render(self):
         st.markdown("### Customer Preferences Form")
@@ -116,31 +78,41 @@ class FormComponent:
                     key="property_type"
                 )
 
-                st.text_input(
-                    "Which suburb or area are you interested in?",
-                    placeholder="e.g. Richmond",
-                    key="suburb"
+                location_options, _ = all_options()
+                current_label = label_for(
+                    st.session_state.get("suburb", ""),
+                    st.session_state.get("postcode", ""),
+                    st.session_state.get("state", ""),
                 )
-                self._render_match_picker(
-                    query=st.session_state.get("suburb", ""),
-                    search_fn=search_by_suburb,
-                    match_map_key="_suburb_match_map",
-                    picker_key="suburb_match_choice",
-                    on_change=_apply_suburb_match,
+
+                # Real, live type-to-filter search over ~18k confirmed AU
+                # localities -- st.selectbox filters its options client-side
+                # as you type, with no rerun/blur needed per keystroke, so
+                # this behaves like a real search bar. Suburb and Postcode
+                # share the same option list/labels ("Suburb, STATE
+                # postcode"), so searching works from either field; picking
+                # from one confirms and fills all three (see _on_*_pick).
+                st.selectbox(
+                    "Which suburb or area are you interested in?",
+                    options=location_options,
+                    index=location_options.index(current_label) if current_label else None,
+                    placeholder="Start typing a suburb name to search...",
+                    key="suburb_picker",
+                    on_change=_on_suburb_pick,
                 )
 
                 loc_col1, loc_col2 = st.columns(2)
                 with loc_col1:
-                    st.text_input("Postcode", placeholder="e.g. 3121", key="postcode")
-                    self._render_match_picker(
-                        query=st.session_state.get("postcode", ""),
-                        search_fn=search_by_postcode,
-                        match_map_key="_postcode_match_map",
-                        picker_key="postcode_match_choice",
-                        on_change=_apply_postcode_match,
+                    st.selectbox(
+                        "Postcode",
+                        options=location_options,
+                        index=location_options.index(current_label) if current_label else None,
+                        placeholder="Start typing a postcode to search...",
+                        key="postcode_picker",
+                        on_change=_on_postcode_pick,
                     )
                 with loc_col2:
-                    st.text_input("State", placeholder="e.g. VIC", key="state")
+                    st.text_input("State", placeholder="Auto-filled from Suburb/Postcode", key="state")
 
                 st.selectbox(
                     "What is your budget?",
