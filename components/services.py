@@ -222,10 +222,33 @@ class AnthropicService:
 
 class HtagService:
     ENDPOINT = "https://agent.htagai.com/micro-agents/agents/suburb-analysis/execute"
+    COMPARISON_ENDPOINT = "https://agent.htagai.com/micro-agents/agents/suburb-comparison/execute"
     _cache = {}
+    _comparison_cache = {}
 
     def __init__(self, config: AppConfig):
         self.config = config
+
+    @staticmethod
+    def _normalize_property_type(property_type: str) -> str:
+        # Normalize to allowed enum: 'house', 'unit', 'townhouse', 'land'
+        if not property_type:
+            return "house"
+        pt_clean = property_type.lower().strip()
+        if "unit" in pt_clean or "apartment" in pt_clean or "flat" in pt_clean:
+            return "unit"
+        if "townhouse" in pt_clean or "semi" in pt_clean or "terrace" in pt_clean:
+            return "townhouse"
+        if "land" in pt_clean:
+            return "land"
+        return "house"
+
+    def _headers(self) -> dict:
+        return {
+            "x-api-key": self.config.htag_api_key,
+            "Authorization": f"Bearer {self.config.htag_api_key}",
+            "Content-Type": "application/json"
+        }
 
     def fetch_suburb_analysis(self, suburb: str, state: str = "", postcode: str = "", property_type: str = "house", force_refresh: bool = False) -> dict:
         """
@@ -237,18 +260,7 @@ class HtagService:
 
         import requests
 
-        # Normalize property type to allowed enum: 'house', 'unit', 'townhouse', 'land'
-        pt_normalized = "house"
-        if property_type:
-            pt_clean = property_type.lower().strip()
-            if "unit" in pt_clean or "apartment" in pt_clean or "flat" in pt_clean:
-                pt_normalized = "unit"
-            elif "townhouse" in pt_clean or "semi" in pt_clean or "terrace" in pt_clean:
-                pt_normalized = "townhouse"
-            elif "land" in pt_clean:
-                pt_normalized = "land"
-            else:
-                pt_normalized = "house"
+        pt_normalized = self._normalize_property_type(property_type)
 
         cache_key = f"{suburb.strip().lower()}_{state.strip().lower()}_{str(postcode).strip()}_{pt_normalized}"
         if not force_refresh and cache_key in self._cache:
@@ -263,14 +275,8 @@ class HtagService:
         if postcode:
             payload["postcode"] = str(postcode).strip()
 
-        headers = {
-            "x-api-key": self.config.htag_api_key,
-            "Authorization": f"Bearer {self.config.htag_api_key}",
-            "Content-Type": "application/json"
-        }
-
         try:
-            response = requests.post(self.ENDPOINT, headers=headers, json=payload, timeout=120)
+            response = requests.post(self.ENDPOINT, headers=self._headers(), json=payload, timeout=120)
             if response.status_code != 200:
                 error_msg = response.text
                 try:
@@ -285,6 +291,68 @@ class HtagService:
             return result
         except requests.exceptions.Timeout:
             raise TimeoutError("HTAG Suburb Analysis request timed out after 120 seconds. Please try again.")
+        except requests.exceptions.RequestException as req_err:
+            raise RuntimeError(f"Network communication with HTAG API failed: {req_err}")
+
+    def fetch_suburb_comparison(self, suburbs: list, property_type: str = "house", force_refresh: bool = False) -> dict:
+        """
+        Calls HTAG's suburb-comparison micro-agent for a real, LLM-written
+        side-by-side comparison of 2-5 suburbs (`suburbs`: list of
+        {"name", "state", "postcode"} dicts). Used to ground
+        verdict.comparable_suburbs in real HTAG research instead of an AI
+        guess -- see report_generation.py.
+
+        Slower and costlier than fetch_suburb_analysis: comparing 3 suburbs
+        took ~150s in testing (vs. ~60s for one suburb), since it's a
+        multi-suburb LLM-powered agent, not a single lookup -- callers
+        should budget for that in their own timeout/loader expectations.
+
+        Note: the response's structured `suburbs[].metrics` fields have been
+        observed coming back null/zeroed even on a fully successful call;
+        the real numbers are reliably present in the free-text
+        `research_output` field instead, so that's what callers should use.
+        """
+        if not self.config.htag_api_key:
+            raise ValueError("HTAG API key is missing. Please add it to your Cred.env file.")
+
+        import requests
+
+        pt_normalized = self._normalize_property_type(property_type)
+        cache_key = (
+            tuple(sorted((s["name"].strip().lower(), s["state"].strip().lower()) for s in suburbs)),
+            pt_normalized,
+        )
+        if not force_refresh and cache_key in self._comparison_cache:
+            return self._comparison_cache[cache_key]
+
+        payload = {
+            "suburbs": [
+                {
+                    "name": s["name"].strip(),
+                    "state": s["state"].strip().upper(),
+                    "postcode": str(s.get("postcode") or "").strip(),
+                }
+                for s in suburbs
+            ],
+            "property_type": pt_normalized,
+        }
+
+        try:
+            response = requests.post(self.COMPARISON_ENDPOINT, headers=self._headers(), json=payload, timeout=240)
+            if response.status_code != 200:
+                error_msg = response.text
+                try:
+                    err_json = response.json()
+                    error_msg = err_json.get("detail", response.text)
+                except Exception:
+                    pass
+                raise RuntimeError(f"HTAG API returned status {response.status_code}: {error_msg}")
+
+            result = response.json()
+            self._comparison_cache[cache_key] = result
+            return result
+        except requests.exceptions.Timeout:
+            raise TimeoutError("HTAG Suburb Comparison request timed out after 240 seconds. Please try again.")
         except requests.exceptions.RequestException as req_err:
             raise RuntimeError(f"Network communication with HTAG API failed: {req_err}")
 

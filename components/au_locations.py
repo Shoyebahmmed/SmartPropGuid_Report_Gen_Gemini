@@ -61,3 +61,51 @@ def label_for(suburb, postcode, state):
     label = _label(suburb, state, postcode)
     _, lookup = _load()
     return label if label in lookup else None
+
+
+def nearby_candidates(suburb, postcode, state, count=2):
+    """
+    A free, offline proxy for "nearby suburbs": the `count` other real
+    localities in the same state whose postcode is numerically closest to
+    this one (Australian postcodes are allocated in regional blocks, so
+    a small numeric gap usually means genuinely nearby), excluding the
+    suburb itself. No geocoding/network round trip needed.
+
+    Used to pick real comparison candidates for HTAG's suburb-comparison
+    agent -- picking WHICH suburbs to compare is necessarily a judgment
+    call, but every number that comes back for them is real HTAG data,
+    not invented.
+    """
+    try:
+        target_pc = int(postcode)
+    except (TypeError, ValueError):
+        return []
+    state = (state or "").strip().upper()
+    suburb_norm = (suburb or "").strip().lower()
+
+    scored = []
+    for row in _load()[1].values():
+        if row["state"] != state or row["suburb"].strip().lower() == suburb_norm:
+            continue
+        try:
+            pc = int(row["postcode"])
+        except ValueError:
+            continue
+        if pc == target_pc:
+            # Same postcode as the target usually means a delivery-centre/PO
+            # alias sharing that postcode, not a genuinely distinct nearby
+            # suburb -- skip it in favour of the closest DIFFERENT postcode.
+            continue
+        scored.append((abs(pc - target_pc), row))
+    scored.sort(key=lambda x: x[0])
+
+    picked, seen = [], set()
+    for _, row in scored:
+        name_key = row["suburb"].strip().lower()
+        if name_key in seen:
+            continue
+        seen.add(name_key)
+        picked.append(row)
+        if len(picked) >= count:
+            break
+    return picked

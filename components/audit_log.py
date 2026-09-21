@@ -51,9 +51,12 @@ _OSM_FIELDS = ["osm_radius_m"]
 for _layer in _OSM_LAYERS:
     _OSM_FIELDS += [f"osm_{_layer}_count", f"osm_{_layer}_nearest_name", f"osm_{_layer}_nearest_distance_m"]
 
+_COMPARISON_FIELDS = ["htag_comparison_suburbs"]
+
 _REPORT_FIELDS = [
     "report_median_price", "report_clearance_rate", "report_days_on_market",
     "report_match_score", "report_sections_flagged_unavailable",
+    "report_comparable_suburbs",
 ]
 
 FIELDNAMES = (
@@ -61,6 +64,7 @@ FIELDNAMES = (
     + [f"htag_{k}" for k in _HTAG_FIELDS]
     + _ABS_FIELDS
     + _OSM_FIELDS
+    + _COMPARISON_FIELDS
     + _REPORT_FIELDS
 )
 
@@ -112,25 +116,76 @@ def _osm_row(osm_nearby):
     return row
 
 
+def _comparison_row(comparison_suburbs):
+    if not comparison_suburbs:
+        return {k: None for k in _COMPARISON_FIELDS}
+    return {
+        "htag_comparison_suburbs": "; ".join(
+            f"{s.get('name')} ({s.get('postcode')})" for s in comparison_suburbs
+        ),
+    }
+
+
 def _report_row(report_data):
     report_data = report_data or {}
     flagged = [
         section for section in _SANITIZED_SECTIONS
         if isinstance(report_data.get(section), dict) and report_data[section].get("data_available") is False
     ]
+    comparables = (report_data.get("verdict") or {}).get("comparable_suburbs") or []
     return {
         "report_median_price": report_data.get("median_price"),
         "report_clearance_rate": report_data.get("clearance_rate"),
         "report_days_on_market": report_data.get("days_on_market"),
         "report_match_score": (report_data.get("snapshot") or {}).get("match_score"),
         "report_sections_flagged_unavailable": "; ".join(flagged) if flagged else "",
+        "report_comparable_suburbs": "; ".join(
+            f"{c.get('name')} ({c.get('postcode')}) - {c.get('price')}" for c in comparables
+        ) if comparables else "",
     }
 
 
 OVERFLOW_PATH = os.path.join(os.path.dirname(LOG_PATH), "report_audit_log.pending.csv")
 
 
+def _existing_header(path):
+    """First line's column names, or None if the file doesn't exist/is empty."""
+    if not os.path.isfile(path):
+        return None
+    with open(path, "r", newline="", encoding="utf-8") as f:
+        try:
+            return next(csv.reader(f))
+        except StopIteration:
+            return None
+
+
+def _migrate_to_current_header(path):
+    """
+    csv.DictWriter writes columns by FIELDNAMES order, not by matching the
+    file's actual header line -- so if FIELDNAMES has changed (a new
+    column added since this file was created) since the file's rows were
+    written, appending blindly would silently misalign every value under
+    the OLD header. Detected here by comparing the file's first line to
+    the current FIELDNAMES; if they differ, every existing row is
+    re-read under its OWN original header and the whole file rewritten
+    under the current one, backfilling any newly-added column as blank
+    and dropping any column no longer in the schema. No data value is
+    ever shifted into the wrong column.
+    """
+    old_header = _existing_header(path)
+    if old_header is None or old_header == FIELDNAMES:
+        return
+    with open(path, "r", newline="", encoding="utf-8") as f:
+        old_rows = list(csv.DictReader(f))
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
+        writer.writeheader()
+        for old_row in old_rows:
+            writer.writerow({k: old_row.get(k) for k in FIELDNAMES})
+
+
 def _write_row(path, row):
+    _migrate_to_current_header(path)
     file_exists = os.path.isfile(path)
     with open(path, "a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
@@ -139,7 +194,7 @@ def _write_row(path, row):
         writer.writerow(row)
 
 
-def log_report(meta, matched_variables, abs_stats, osm_nearby, report_data, path=LOG_PATH):
+def log_report(meta, matched_variables, abs_stats, osm_nearby, report_data, comparison_suburbs=None, path=LOG_PATH):
     """
     Append one audit row for a just-generated report. Never raises -- a
     logging failure must not break report generation; the caller still
@@ -156,6 +211,7 @@ def log_report(meta, matched_variables, abs_stats, osm_nearby, report_data, path
     row.update(_htag_row(matched_variables))
     row.update(_abs_row(abs_stats))
     row.update(_osm_row(osm_nearby))
+    row.update(_comparison_row(comparison_suburbs))
     row.update(_report_row(report_data))
 
     try:

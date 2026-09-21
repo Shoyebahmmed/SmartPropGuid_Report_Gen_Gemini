@@ -13,5 +13,4 @@ __pycache__/
 
 # Per-report audit trail (accumulates real generated-report data locally --
 # not something to check into shared history)
-report_audit_log.csv
-report_audit_log.pending.csv
+report_audit_log*.csv
