@@ -13,17 +13,17 @@ class DataSelectionComponent:
 
     def render(self) -> str:
         st.markdown("### Data Source Configuration")
-        st.markdown("Choose whether to use live HTAG Suburb Analysis API data or upload manual operator records for Step 3. Reports are always rendered with SmartPropGuid's standard template.")
+        st.markdown("Live HTAG Suburb Analysis data is always pulled in automatically when an API key is configured. Optionally also upload manual operator records below to layer real listings on top for Step 3. Reports are always rendered with SmartPropGuid's standard template.")
 
         text_muted = "#9c9484"
 
         with st.container(border=True):
             st.markdown("<h4>1. Source Data Selection</h4>", unsafe_allow_html=True)
-            st.markdown(f"<p style='font-size:0.8rem; color:{text_muted};'>Select your property intelligence source mode below:</p>", unsafe_allow_html=True)
+            st.markdown(f"<p style='font-size:0.8rem; color:{text_muted};'>Optionally add manual listings on top of the automatic HTAG suburb intelligence:</p>", unsafe_allow_html=True)
 
             source_options = [
-                "📁 Upload Data File (CSV / Excel)",
-                "🌐 Live HTAG Suburb Analysis API"
+                "🌐 Live HTAG Suburb Analysis API",
+                "📁 Upload Data File (CSV / Excel)"
             ]
 
             # Current selection default

@@ -127,11 +127,29 @@ def _report_row(report_data):
     }
 
 
+OVERFLOW_PATH = os.path.join(os.path.dirname(LOG_PATH), "report_audit_log.pending.csv")
+
+
+def _write_row(path, row):
+    file_exists = os.path.isfile(path)
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
+
+
 def log_report(meta, matched_variables, abs_stats, osm_nearby, report_data, path=LOG_PATH):
     """
     Append one audit row for a just-generated report. Never raises -- a
-    logging failure (e.g. the CSV is open elsewhere) must not break report
-    generation; the caller wraps this in its own try/except regardless.
+    logging failure must not break report generation; the caller still
+    wraps this in its own try/except as a last resort.
+
+    If `path` is locked (e.g. open in Excel, which takes an exclusive
+    lock on Windows), the row is written to report_audit_log.pending.csv
+    next to it instead of being silently dropped -- merge that file's
+    rows into the main log once it's closed. Returns the path actually
+    written to, or None if both writes failed.
     """
     row = dict.fromkeys(FIELDNAMES)
     row.update(meta)
@@ -140,9 +158,14 @@ def log_report(meta, matched_variables, abs_stats, osm_nearby, report_data, path
     row.update(_osm_row(osm_nearby))
     row.update(_report_row(report_data))
 
-    file_exists = os.path.isfile(path)
-    with open(path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
-        if not file_exists:
-            writer.writeheader()
-        writer.writerow(row)
+    try:
+        _write_row(path, row)
+        return path
+    except OSError:
+        pass
+
+    try:
+        _write_row(OVERFLOW_PATH, row)
+        return OVERFLOW_PATH
+    except OSError:
+        return None

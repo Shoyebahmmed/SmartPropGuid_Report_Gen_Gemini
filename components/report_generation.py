@@ -8,7 +8,7 @@ from components.variable_mapper import build_standardized_property_payload
 from components.report_sanitizer import sanitize_report_data
 from components.osm_client import geocode_suburb, summarize_nearby
 from components.abs_client import summarize_region_stats
-from components.audit_log import log_report
+from components.audit_log import log_report, LOG_PATH as AUDIT_LOG_PATH
 
 AU_STATE_NAMES = {
     "NSW": "NEW SOUTH WALES",
@@ -153,14 +153,25 @@ class ReportGenerationComponent:
                 # skip the banner entirely for suburb-level HTAG reports.
                 property_match_count = None
 
-                # Branch by Data Source Mode
+                # Suburb-level market intelligence: fetched from HTAG whenever
+                # an API key is configured, regardless of which Data Source
+                # mode is selected on Tab 2. This used to run ONLY in "Live
+                # HTAG" mode -- so leaving the default "Upload Data File" mode
+                # with nothing uploaded meant every suburb-level figure in the
+                # report (median price, growth, yield, clearance rate...) was
+                # invented by the AI with zero real grounding, and every HTAG
+                # column in the audit log came back empty even though a key
+                # was configured. HTAG is free and needs no operator action,
+                # so it's now the always-on baseline; "Upload Data File" mode
+                # below additionally layers real listings on top of it rather
+                # than replacing it -- those two have always been
+                # complementary (listings vs. suburb-level matched_variables),
+                # never competing.
                 is_htag_mode = "HTAG" in self.session.data_source_mode
                 raw_api_payload = None
-
-                if is_htag_mode:
-                    # Retrieve or fetch HTAG data
+                if suburb_clean and self.config.htag_api_key:
                     htag_data = self.session.htag_data
-                    if not htag_data and suburb_clean:
+                    if not htag_data:
                         try:
                             htag_data = self.htag_service.fetch_suburb_analysis(
                                 suburb=suburb_clean,
@@ -171,10 +182,11 @@ class ReportGenerationComponent:
                             self.session.htag_data = htag_data
                         except Exception as htag_err:
                             st.warning(f"⚠️ Could not auto-fetch HTAG API data: {htag_err}")
-
                     raw_api_payload = htag_data
-                else:
-                    # Upload File Mode (CSV / Excel)
+
+                if not is_htag_mode:
+                    # Upload File Mode (CSV / Excel) -- layers real listings
+                    # on top of the HTAG suburb intelligence fetched above.
                     df_active = self.session.df_data
                     if df_active is None and postcode_str:
                         try:
@@ -390,7 +402,7 @@ Return a single JSON object with EXACTLY these top-level keys matching the repor
                 # report's numbers be traced back to a real source query.
                 # Never allowed to break report generation if it fails.
                 try:
-                    log_report(
+                    audit_path = log_report(
                         meta={
                             "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
                             "suburb": suburb_clean,
@@ -406,6 +418,12 @@ Return a single JSON object with EXACTLY these top-level keys matching the repor
                         osm_nearby=extra_context.get("osm_nearby"),
                         report_data=report_data,
                     )
+                    if audit_path and audit_path != AUDIT_LOG_PATH:
+                        st.info(
+                            "ℹ️ report_audit_log.csv is open elsewhere (e.g. Excel), so this "
+                            "report's audit row was saved to report_audit_log.pending.csv instead -- "
+                            "close the main file and merge it in when convenient."
+                        )
                 except Exception:
                     pass
 

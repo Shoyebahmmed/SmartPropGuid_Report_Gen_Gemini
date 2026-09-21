@@ -79,7 +79,7 @@ class SessionState:
             st.session_state.theme = "dark"
 
         if "data_source_mode" not in st.session_state:
-            st.session_state.data_source_mode = "📁 Upload Data File (CSV / Excel)"
+            st.session_state.data_source_mode = "🌐 Live HTAG Suburb Analysis API"
 
         if "htag_data" not in st.session_state:
             st.session_state.htag_data = None
@@ -111,7 +111,7 @@ class SessionState:
 
     @property
     def data_source_mode(self) -> str:
-        return st.session_state.get("data_source_mode", "📁 Upload Data File (CSV / Excel)")
+        return st.session_state.get("data_source_mode", "🌐 Live HTAG Suburb Analysis API")
 
     @data_source_mode.setter
     def data_source_mode(self, value: str):
