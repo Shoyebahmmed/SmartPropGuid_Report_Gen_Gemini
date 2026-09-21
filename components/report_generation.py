@@ -8,7 +8,6 @@ from components.variable_mapper import build_standardized_property_payload
 from components.report_sanitizer import sanitize_report_data
 from components.osm_client import geocode_suburb, summarize_nearby
 from components.abs_client import summarize_region_stats
-from components.au_locations import nearby_candidates
 from components.audit_log import log_report, LOG_PATH as AUDIT_LOG_PATH
 
 AU_STATE_NAMES = {
@@ -272,39 +271,6 @@ class ReportGenerationComponent:
                 except Exception:
                     pass
 
-                # Real, HTAG-sourced comparison against 2 genuinely nearby
-                # suburbs (picked via components/au_locations.py -- same
-                # state, closest DIFFERENT postcode, a free offline proxy
-                # for "nearby" with no extra geocoding call) -- grounds
-                # verdict.comparable_suburbs in real research instead of the
-                # AI inventing plausible-sounding alternatives. This is the
-                # slowest and costliest of the four real-data calls (~2-3
-                # minutes for 3 suburbs, vs. ~1 minute for suburb-analysis
-                # alone), so it only runs when real-data grounding is on
-                # AND a postcode is available to seed the candidate search.
-                if enrich_with_real_data and postcode_str and self.config.htag_api_key:
-                    UiHelper.update_loader(
-                        loader_placeholder, "Comparing nearby suburbs (HTAG)...", 19, self.session.theme
-                    )
-                    try:
-                        candidates = nearby_candidates(suburb_clean, postcode_str, state_str, count=2)
-                        if candidates:
-                            comparison_suburbs = [
-                                {"name": suburb_clean, "state": state_str, "postcode": postcode_str}
-                            ] + [
-                                {"name": c["suburb"], "state": c["state"], "postcode": c["postcode"]}
-                                for c in candidates
-                            ]
-                            comparison = self.htag_service.fetch_suburb_comparison(
-                                comparison_suburbs, property_type=property_type
-                            )
-                            narrative = comparison.get("research_output")
-                            if narrative:
-                                extra_context["htag_suburb_comparison_narrative"] = narrative
-                                extra_context["htag_comparison_suburbs"] = comparison_suburbs
-                    except Exception:
-                        pass
-
                 # Structure incoming data into 41 standard matched_variables and extra_variables
                 standardized_payload = build_standardized_property_payload(
                     suburb=suburb_clean,
@@ -388,13 +354,6 @@ You are the primary AI Engine for SmartPropGuide. Your task is to process a pre-
      gives the latest Estimated Resident Population plus real 1yr/5yr growth percentages for the
      LGA -- use these for any population/growth claims in "growth" or "community" instead of
      guessing.
-   - `extra_variables.htag_suburb_comparison_narrative`, when present, is a REAL, HTAG-sourced
-     written comparison of this suburb against `extra_variables.htag_comparison_suburbs` (2-3
-     real, genuinely nearby suburbs, each with its own name/state/postcode) -- not an estimate.
-     READ IT CAREFULLY and use the real prices, yields, and growth figures it states for those
-     OTHER suburbs to populate "verdict.comparable_suburbs" (name, postcode, and the real price
-     from the narrative) instead of inventing plausible-sounding alternatives. Also pull any
-     relevant relative-strength observations from it into the "verdict" summary/considerations.
 
 4. OUTPUT INSTRUCTIONS:
    - Generate ONLY a single valid JSON object containing the required report data structure below.
@@ -471,7 +430,6 @@ Return a single JSON object with EXACTLY these top-level keys matching the repor
                         abs_stats=extra_context.get("abs_stats"),
                         osm_nearby=extra_context.get("osm_nearby"),
                         report_data=report_data,
-                        comparison_suburbs=extra_context.get("htag_comparison_suburbs"),
                     )
                     if audit_path and audit_path != AUDIT_LOG_PATH:
                         st.info(
