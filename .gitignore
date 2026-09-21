@@ -9,4 +9,8 @@ __pycache__/
 *.pyo
 *.pyd
 .ipynb_checkpoints/
-"Cred.env" 
+"Cred.env"
+
+# Per-report audit trail (accumulates real generated-report data locally --
+# not something to check into shared history)
+report_audit_log.csv

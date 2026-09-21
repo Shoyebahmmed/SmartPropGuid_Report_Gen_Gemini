@@ -8,6 +8,7 @@ from components.variable_mapper import build_standardized_property_payload
 from components.report_sanitizer import sanitize_report_data
 from components.osm_client import geocode_suburb, summarize_nearby
 from components.abs_client import summarize_region_stats
+from components.audit_log import log_report
 
 AU_STATE_NAMES = {
     "NSW": "NEW SOUTH WALES",
@@ -382,6 +383,31 @@ Return a single JSON object with EXACTLY these top-level keys matching the repor
                 report_data["state_display"] = f"{state_full}, AUSTRALIA" if state_full else "AUSTRALIA"
                 if property_match_count is not None:
                     report_data["property_match_count"] = property_match_count
+
+                # Audit trail: one CSV row per report recording the exact real
+                # values pulled from HTAG, ABS and ArcGIS/OSM for this suburb,
+                # next to what the AI put in the finished report -- lets any
+                # report's numbers be traced back to a real source query.
+                # Never allowed to break report generation if it fails.
+                try:
+                    log_report(
+                        meta={
+                            "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+                            "suburb": suburb_clean,
+                            "postcode": postcode_str,
+                            "state": state_str,
+                            "property_type": property_type,
+                            "budget_range": budget,
+                            "intention": intention,
+                            "data_source_mode": self.session.data_source_mode,
+                        },
+                        matched_variables=standardized_payload.get("matched_variables"),
+                        abs_stats=extra_context.get("abs_stats"),
+                        osm_nearby=extra_context.get("osm_nearby"),
+                        report_data=report_data,
+                    )
+                except Exception:
+                    pass
 
                 # Render HTML with Jinja2 template -- always the fixed default
                 # template; operators can no longer swap it out, so there's no
