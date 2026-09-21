@@ -99,6 +99,10 @@ class ReportGenerationComponent:
             with prov_col2:
                 st.markdown("<h4>Active Data Source</h4>", unsafe_allow_html=True)
                 st.info(f"Using: **{self.session.data_source_mode}**")
+                if self.session.real_data_enrichment:
+                    st.success("✅ Real-data grounding ON (HTAG + ABS + ArcGIS/OSM)")
+                else:
+                    st.warning("⚠️ Real-data grounding OFF -- AI estimates only. Turn back on in Tab 2.")
 
         # UI Layout: Settings Summary Card & Generation Button
         bg_subtle = UiHelper.get_bg_subtle_color(self.session.theme)
@@ -153,6 +157,12 @@ class ReportGenerationComponent:
                 # skip the banner entirely for suburb-level HTAG reports.
                 property_match_count = None
 
+                # Master switch (Tab 2, on by default): every real-data API
+                # call below -- HTAG, ArcGIS/OSM, ABS -- is gated on this, so
+                # turning it off falls back to a faster, fully AI-estimated
+                # draft with no live data calls, on demand.
+                enrich_with_real_data = self.session.real_data_enrichment
+
                 # Suburb-level market intelligence: fetched from HTAG whenever
                 # an API key is configured, regardless of which Data Source
                 # mode is selected on Tab 2. This used to run ONLY in "Live
@@ -167,9 +177,10 @@ class ReportGenerationComponent:
                 # than replacing it -- those two have always been
                 # complementary (listings vs. suburb-level matched_variables),
                 # never competing.
+
                 is_htag_mode = "HTAG" in self.session.data_source_mode
                 raw_api_payload = None
-                if suburb_clean and self.config.htag_api_key:
+                if enrich_with_real_data and suburb_clean and self.config.htag_api_key:
                     htag_data = self.session.htag_data
                     if not htag_data:
                         try:
@@ -227,18 +238,19 @@ class ReportGenerationComponent:
                 # the same way: skip silently and let the AI fall back to
                 # its own estimate, per the prompt's rule 1 -- this must
                 # never block report generation.
-                UiHelper.update_loader(
-                    loader_placeholder, "Finding nearby places (OpenStreetMap)...", 14, self.session.theme
-                )
                 coords = None
-                try:
-                    coords = geocode_suburb(suburb_clean, state_str, postcode_str)
-                    if coords:
-                        osm_summary = summarize_nearby(coords[0], coords[1])
-                        if osm_summary:
-                            extra_context["osm_nearby"] = osm_summary
-                except Exception:
-                    pass
+                if enrich_with_real_data:
+                    UiHelper.update_loader(
+                        loader_placeholder, "Finding nearby places (OpenStreetMap)...", 14, self.session.theme
+                    )
+                    try:
+                        coords = geocode_suburb(suburb_clean, state_str, postcode_str)
+                        if coords:
+                            osm_summary = summarize_nearby(coords[0], coords[1])
+                            if osm_summary:
+                                extra_context["osm_nearby"] = osm_summary
+                    except Exception:
+                        pass
 
                 # Real ABS Census 2021 + population-trend stats for this
                 # suburb's actual LGA (resolved via ABS's own official
@@ -247,11 +259,12 @@ class ReportGenerationComponent:
                 # geocoding twice. Same fail-soft contract as OSM: ABS being
                 # unreachable or the LGA having no published data just means
                 # this key is absent, never a blocked report.
-                UiHelper.update_loader(
-                    loader_placeholder, "Fetching regional statistics (ABS)...", 17, self.session.theme
-                )
+                if enrich_with_real_data:
+                    UiHelper.update_loader(
+                        loader_placeholder, "Fetching regional statistics (ABS)...", 17, self.session.theme
+                    )
                 try:
-                    if coords:
+                    if enrich_with_real_data and coords:
                         abs_summary = summarize_region_stats(coords[0], coords[1])
                         if abs_summary:
                             extra_context["abs_stats"] = abs_summary

@@ -18,6 +18,24 @@ class DataSelectionComponent:
         text_muted = "#9c9484"
 
         with st.container(border=True):
+            st.markdown("<h4>Real-Data Grounding</h4>", unsafe_allow_html=True)
+            st.checkbox(
+                "Always pull real data from HTAG, ABS Census and ArcGIS/OSM for every report (recommended)",
+                value=self.session.real_data_enrichment,
+                key="real_data_enrichment_toggle",
+                on_change=lambda: setattr(self.session, "real_data_enrichment", st.session_state.real_data_enrichment_toggle),
+                help=(
+                    "On by default. Every report pulls real HTAG suburb metrics, real ABS Census 2021 "
+                    "medians/population for the suburb's actual council area, and real named nearby "
+                    "places from ArcGIS/OpenStreetMap -- so median price, income, rent and nearby "
+                    "amenities are sourced, not guessed. Turn this off only to generate a faster draft "
+                    "report using the AI's own estimates, with no live data calls."
+                ),
+            )
+            if not self.session.real_data_enrichment:
+                st.warning("⚠️ Real-data grounding is OFF -- this report's figures will be the AI's own estimates, not sourced from HTAG/ABS/ArcGIS.")
+
+        with st.container(border=True):
             st.markdown("<h4>1. Source Data Selection</h4>", unsafe_allow_html=True)
             st.markdown(f"<p style='font-size:0.8rem; color:{text_muted};'>Optionally add manual listings on top of the automatic HTAG suburb intelligence:</p>", unsafe_allow_html=True)
 

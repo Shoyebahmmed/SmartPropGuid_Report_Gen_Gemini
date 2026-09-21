@@ -81,6 +81,13 @@ class SessionState:
         if "data_source_mode" not in st.session_state:
             st.session_state.data_source_mode = "🌐 Live HTAG Suburb Analysis API"
 
+        # Master switch for real-data grounding (HTAG + ABS Census + ArcGIS/
+        # OSM nearby places). On by default -- every report is grounded in
+        # real, sourced data unless an operator deliberately turns this off
+        # (e.g. to generate a quick draft without waiting on live API calls).
+        if "real_data_enrichment" not in st.session_state:
+            st.session_state.real_data_enrichment = True
+
         if "htag_data" not in st.session_state:
             st.session_state.htag_data = None
 
@@ -116,6 +123,14 @@ class SessionState:
     @data_source_mode.setter
     def data_source_mode(self, value: str):
         st.session_state.data_source_mode = value
+
+    @property
+    def real_data_enrichment(self) -> bool:
+        return st.session_state.get("real_data_enrichment", True)
+
+    @real_data_enrichment.setter
+    def real_data_enrichment(self, value: bool):
+        st.session_state.real_data_enrichment = value
 
     @property
     def htag_data(self):
