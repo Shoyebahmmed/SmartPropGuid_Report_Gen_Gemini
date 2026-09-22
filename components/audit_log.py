@@ -33,8 +33,8 @@ _SANITIZED_SECTIONS = [
 ]
 
 _META_FIELDS = [
-    "timestamp", "suburb", "postcode", "state", "property_type", "budget_range",
-    "intention", "data_source_mode",
+    "timestamp", "suburb", "postcode", "state", "property_address", "property_type",
+    "budget_range", "intention", "data_source_mode",
 ]
 
 _ABS_FIELDS = [
@@ -53,6 +53,13 @@ for _layer in _OSM_LAYERS:
 
 _COMPARISON_FIELDS = ["htag_comparison_suburbs"]
 
+_DUE_DILIGENCE_CONSTRAINT_CATEGORIES = [
+    "zoning", "flooding", "bushfire risk", "character", "easements", "contaminated land",
+]
+_DUE_DILIGENCE_FIELDS = ["prop_dd_matched_address", "prop_dd_council", "prop_dd_area_sqm"] + [
+    f"prop_dd_{cat.replace(' ', '_')}" for cat in _DUE_DILIGENCE_CONSTRAINT_CATEGORIES
+]
+
 _REPORT_FIELDS = [
     "report_median_price", "report_clearance_rate", "report_days_on_market",
     "report_match_score", "report_sections_flagged_unavailable",
@@ -65,6 +72,7 @@ FIELDNAMES = (
     + _ABS_FIELDS
     + _OSM_FIELDS
     + _COMPARISON_FIELDS
+    + _DUE_DILIGENCE_FIELDS
     + _REPORT_FIELDS
 )
 
@@ -124,6 +132,29 @@ def _comparison_row(comparison_suburbs):
             f"{s.get('name')} ({s.get('postcode')})" for s in comparison_suburbs
         ),
     }
+
+
+def _due_diligence_row(due_diligence):
+    if not due_diligence:
+        return {k: None for k in _DUE_DILIGENCE_FIELDS}
+    info = due_diligence.get("info") or {}
+    constraints = due_diligence.get("constraints") or {}
+    row = {
+        "prop_dd_matched_address": (due_diligence.get("matched_address") or {}).get("full_address"),
+        "prop_dd_council": info.get("council"),
+        "prop_dd_area_sqm": info.get("area_sqm"),
+    }
+    for cat in _DUE_DILIGENCE_CONSTRAINT_CATEGORIES:
+        col = f"prop_dd_{cat.replace(' ', '_')}"
+        if cat == "zoning":
+            zoning = info.get("zoning") or []
+            row[col] = "; ".join(zoning) if zoning else "none listed"
+            continue
+        entries = constraints.get(cat) or []
+        row[col] = "; ".join(
+            f"{e.get('name')}: {e.get('value')}" for e in entries
+        ) if entries else "none found"
+    return row
 
 
 def _report_row(report_data):
@@ -194,7 +225,8 @@ def _write_row(path, row):
         writer.writerow(row)
 
 
-def log_report(meta, matched_variables, abs_stats, osm_nearby, report_data, comparison_suburbs=None, path=LOG_PATH):
+def log_report(meta, matched_variables, abs_stats, osm_nearby, report_data,
+                comparison_suburbs=None, due_diligence=None, path=LOG_PATH):
     """
     Append one audit row for a just-generated report. Never raises -- a
     logging failure must not break report generation; the caller still
@@ -212,6 +244,7 @@ def log_report(meta, matched_variables, abs_stats, osm_nearby, report_data, comp
     row.update(_abs_row(abs_stats))
     row.update(_osm_row(osm_nearby))
     row.update(_comparison_row(comparison_suburbs))
+    row.update(_due_diligence_row(due_diligence))
     row.update(_report_row(report_data))
 
     try:

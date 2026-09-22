@@ -84,6 +84,7 @@ class ReportGenerationComponent:
         property_type = st.session_state.get("property_type", "House")
         budget = st.session_state.get("budget", "")
         intention = st.session_state.get("intention", "")
+        property_address = st.session_state.get("property_address", "").strip()
 
         selected_priorities = st.session_state.get("priorities_pills", []) or []
 
@@ -113,6 +114,7 @@ class ReportGenerationComponent:
             st.markdown(f"""
             <div style="background-color: {bg_subtle}; padding: 1rem; border-radius: 8px; border: 1px solid {border_color}; font-size: 0.88rem;">
                 <strong>Target Area:</strong> {suburb if suburb else "Not specified"} |
+                {f"<strong>Specific Address:</strong> {property_address} | " if property_address else ""}
                 <strong>Property Type:</strong> {property_type} |
                 <strong>Budget:</strong> {budget} |
                 <strong>Purpose:</strong> {intention} |
@@ -271,6 +273,27 @@ class ReportGenerationComponent:
                 except Exception:
                     pass
 
+                # Real, parcel-level planning/constraints data for one exact
+                # street address -- only when the operator filled in
+                # "Specific property address" on Tab 1. Answers a different
+                # question than the suburb-level sources above (is THIS
+                # BLOCK sound, not just is the area good), so it's additive,
+                # not a replacement for them. Cheap and fast relative to the
+                # suburb-level HTAG agents (single lookup, not LLM-composed).
+                # Geometry is dropped -- a GeoJSON polygon has no use in a
+                # text report and would bloat the prompt for nothing.
+                if enrich_with_real_data and property_address and self.config.htag_api_key:
+                    UiHelper.update_loader(
+                        loader_placeholder, "Checking property zoning & risk data (HTAG)...", 18, self.session.theme
+                    )
+                    try:
+                        due_diligence = self.htag_service.fetch_property_due_diligence(property_address)
+                        due_diligence.pop("geometry", None)
+                        if due_diligence.get("info") or due_diligence.get("constraints"):
+                            extra_context["htag_property_due_diligence"] = due_diligence
+                    except Exception:
+                        pass
+
                 # Structure incoming data into 41 standard matched_variables and extra_variables
                 standardized_payload = build_standardized_property_payload(
                     suburb=suburb_clean,
@@ -354,6 +377,20 @@ You are the primary AI Engine for SmartPropGuide. Your task is to process a pre-
      gives the latest Estimated Resident Population plus real 1yr/5yr growth percentages for the
      LGA -- use these for any population/growth claims in "growth" or "community" instead of
      guessing.
+   - `extra_variables.htag_property_due_diligence`, when present, is REAL, parcel-level planning
+     and constraints data for the client's SPECIFIC street address (not the suburb in general) --
+     not an estimate. Its `info` object gives the exact zoning, lot size, council, and any schools
+     already matched to that address; its `constraints` object gives named findings across
+     categories such as "flooding", "bushfire risk", "character" (heritage), "easements",
+     "contaminated land", "vegetation", and "noise" -- each entry is a real {{name, value}} pair,
+     and an empty list for a category means no such constraint was found for this parcel (state
+     that plainly rather than omitting it, since "no flood risk found" is itself a useful real
+     finding). This is address-specific, so keep it clearly distinct from the suburb-level risk
+     picture: weave its real findings into the "risk" section's entries (each with the address or
+     "this property" in the title so it doesn't read as a suburb-wide claim), and use its zoning/
+     schools into "infrastructure"/"schools" where they fit. If this key is absent, no specific
+     address was provided -- write the report at suburb level as usual, with no property-specific
+     risk claims.
 
 4. OUTPUT INSTRUCTIONS:
    - Generate ONLY a single valid JSON object containing the required report data structure below.
@@ -421,6 +458,7 @@ Return a single JSON object with EXACTLY these top-level keys matching the repor
                             "suburb": suburb_clean,
                             "postcode": postcode_str,
                             "state": state_str,
+                            "property_address": property_address,
                             "property_type": property_type,
                             "budget_range": budget,
                             "intention": intention,
@@ -430,6 +468,7 @@ Return a single JSON object with EXACTLY these top-level keys matching the repor
                         abs_stats=extra_context.get("abs_stats"),
                         osm_nearby=extra_context.get("osm_nearby"),
                         report_data=report_data,
+                        due_diligence=extra_context.get("htag_property_due_diligence"),
                     )
                     if audit_path and audit_path != AUDIT_LOG_PATH:
                         st.info(

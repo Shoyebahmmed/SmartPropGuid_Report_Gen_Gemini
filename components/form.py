@@ -114,6 +114,17 @@ class FormComponent:
                 with loc_col2:
                     st.text_input("State", placeholder="Auto-filled from Suburb/Postcode", key="state")
 
+                st.text_input(
+                    "Specific property address (optional)",
+                    placeholder="e.g. 12 Smith St, Parramatta NSW 2150",
+                    help=(
+                        "Leave blank for a suburb-level report. Fill this in when the client has an "
+                        "actual property in mind -- the report will additionally pull real parcel-level "
+                        "zoning, flood/bushfire risk, heritage and easement data for that exact address."
+                    ),
+                    key="property_address",
+                )
+
                 st.selectbox(
                     "What is your budget?",
                     options=BUDGET_OPTIONS,

@@ -223,8 +223,10 @@ class AnthropicService:
 class HtagService:
     ENDPOINT = "https://agent.htagai.com/micro-agents/agents/suburb-analysis/execute"
     COMPARISON_ENDPOINT = "https://agent.htagai.com/micro-agents/agents/suburb-comparison/execute"
+    DUE_DILIGENCE_ENDPOINT = "https://agent.htagai.com/micro-agents/agents/property-due-diligence/execute"
     _cache = {}
     _comparison_cache = {}
+    _due_diligence_cache = {}
 
     def __init__(self, config: AppConfig):
         self.config = config
@@ -356,6 +358,48 @@ class HtagService:
         except requests.exceptions.RequestException as req_err:
             raise RuntimeError(f"Network communication with HTAG API failed: {req_err}")
 
+    def fetch_property_due_diligence(self, address: str, force_refresh: bool = False) -> dict:
+        """
+        Calls HTAG's property-due-diligence micro-agent for a real,
+        parcel-level planning/constraints snapshot of one exact street
+        address -- zoning, flood/bushfire risk, heritage, easements,
+        vegetation, utilities, schools, lot geometry. Cheap (1 credit) and
+        fast relative to the suburb-level agents, since it's a single
+        lookup, not an LLM-composed comparison.
+
+        Answers a different question than suburb-analysis/ABS/OSM: those
+        describe the AREA, this describes the SPECIFIC PARCEL -- used only
+        when the operator has an actual address, not just a suburb.
+        """
+        if not self.config.htag_api_key:
+            raise ValueError("HTAG API key is missing. Please add it to your Cred.env file.")
+
+        import requests
+
+        cache_key = address.strip().lower()
+        if not force_refresh and cache_key in self._due_diligence_cache:
+            return self._due_diligence_cache[cache_key]
+
+        payload = {"address": address.strip()}
+
+        try:
+            response = requests.post(self.DUE_DILIGENCE_ENDPOINT, headers=self._headers(), json=payload, timeout=90)
+            if response.status_code != 200:
+                error_msg = response.text
+                try:
+                    err_json = response.json()
+                    error_msg = err_json.get("detail", response.text)
+                except Exception:
+                    pass
+                raise RuntimeError(f"HTAG API returned status {response.status_code}: {error_msg}")
+
+            result = response.json()
+            self._due_diligence_cache[cache_key] = result
+            return result
+        except requests.exceptions.Timeout:
+            raise TimeoutError("HTAG Property Due Diligence request timed out after 90 seconds. Please try again.")
+        except requests.exceptions.RequestException as req_err:
+            raise RuntimeError(f"Network communication with HTAG API failed: {req_err}")
 
 
 class TemplateService:
