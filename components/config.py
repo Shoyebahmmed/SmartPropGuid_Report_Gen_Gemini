@@ -70,7 +70,6 @@ class SessionState:
         "suburb": "",
         "postcode": "",
         "state": "",
-        "property_address": "",
         "budget": "Under $500k",
         "intention": "Live in",
     }
