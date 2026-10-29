@@ -45,7 +45,8 @@ SmartPropGuid_Report_Gen_Gemini/
     ├── __init__.py             # Package initializer
     ├── config.py               # AppConfig & SessionState class wrappers
     ├── ui_utils.py             # UI elements helper & CSS styles injection
-    ├── services.py             # ExcelService, DataService, AnthropicService, HtagService, TemplateService, PdfService
+    ├── submission_store.py     # Customer enquiry log: Google Sheets, or local Excel fallback
+    ├── services.py             # DataService, AnthropicService, HtagService, TemplateService, PdfService
     ├── report_sanitizer.py     # Defensive repair of the AI's JSON before it hits the template
     ├── variable_mapper.py      # Standardizes raw HTAG/CSV data into the 41-variable payload
     ├── form.py                 # Customer Preferences form component UI
@@ -58,7 +59,7 @@ Each module has a single responsibility:
 - **`AppConfig`**: Resolves local resources paths, sets environment setups, and loads API keys for Anthropic and HTAG.
 - **`SessionState`**: Encapsulates properties in Streamlit state parameters.
 - **`UiHelper`**: Renders the stage-driven generation progress overlay and injects the dark/light theme CSS properties.
-- **`ExcelService`**: Appends customer intake sheet submissions safely.
+- **`submission_store`**: Records each customer enquiry (on Generate) to Google Sheets, falling back to the local `SPG_Customer_Intake_Form.xlsx` when no Google credentials are set.
 - **`DataService`**: Manages filtering operations and autoloads postcode datasets.
 - **`AnthropicService`**: Interacts with Anthropic Claude for structured JSON report generation.
 - **`HtagService`**: Connects to the HTAG Micro-Agent Suburb Analysis API to fetch live real estate metrics.

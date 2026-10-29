@@ -1,0 +1,4 @@
+[theme]
+# Brand gold (from LOGO.png) instead of Streamlit's default red, so selected
+# chips, focus rings and primary buttons all read as "chosen", not "error".
+primaryColor = "#d7b35e"

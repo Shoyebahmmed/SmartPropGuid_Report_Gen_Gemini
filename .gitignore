@@ -14,3 +14,9 @@ __pycache__/
 # Per-report audit trail (accumulates real generated-report data locally --
 # not something to check into shared history)
 report_audit_log*.csv
+
+# Google service-account key for the Sheets enquiry log -- a credential
+google_service_account*.json
+
+# Playwright MCP browser-tool snapshots/screenshots
+.playwright-mcp/

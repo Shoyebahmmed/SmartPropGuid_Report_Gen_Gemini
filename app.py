@@ -1,7 +1,6 @@
 import streamlit as st
-from components.config import AppConfig, SessionState
+from components.config import AppConfig, SessionState, TAB_LABELS, ACTIVE_TAB_KEY
 from components.services import (
-    ExcelService,
     DataService,
     AnthropicService,
     HtagService,
@@ -23,7 +22,6 @@ class App:
         self.session.initialize_defaults()
 
         # 2. Service Initializations
-        self.excel_service = ExcelService(self.config)
         self.data_service = DataService(self.config)
         self.anthropic_service = AnthropicService(self.config)
         self.htag_service = HtagService(self.config)
@@ -31,7 +29,7 @@ class App:
         self.template_service = TemplateService()
 
         # 3. Component Initializations
-        self.form_component = FormComponent(self.session, self.excel_service)
+        self.form_component = FormComponent(self.session)
         self.data_selection_component = DataSelectionComponent(
             self.session,
             self.config,
@@ -82,13 +80,23 @@ class App:
         border_color = UiHelper.get_border_color(self.session.theme)
         st.markdown(f"<hr style='margin-top:0.5rem; margin-bottom:1.5rem; border-color:{border_color}'>", unsafe_allow_html=True)
         
-        # Tabs Navigation
-        tab_preferences, tab_upload, tab_generate = st.tabs([
-            "📋 1. Customer Preferences",
-            "📂 2. Data Source",
-            "✨ 3. AI Report Generation"
-        ])
-        
+        # Tabs Navigation -- keyed + state-tracking so the Next/Back buttons
+        # can switch tabs (SessionState.go_to_tab). All three tabs still
+        # render every run, so no widget state is lost while hidden.
+        tab_preferences, tab_upload, tab_generate = st.tabs(
+            TAB_LABELS, key=ACTIVE_TAB_KEY, on_change="rerun"
+        )
+
+        # After Next/Back, jump to the top of the newly opened tab instead of
+        # leaving the operator at the bottom where the button was.
+        if st.session_state.pop("scroll_to_top", False):
+            st.components.v1.html(
+                "<script>const d = window.parent.document;"
+                "(d.querySelector('section[data-testid=\"stMain\"]') || d.documentElement).scrollTo({top: 0, behavior: 'smooth'});"
+                "window.parent.scrollTo({top: 0, behavior: 'smooth'});</script>",
+                height=0,
+            )
+
         with tab_preferences:
             self.form_component.render()
             

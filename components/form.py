@@ -1,42 +1,24 @@
 import streamlit as st
 from components.config import SessionState, BUDGET_OPTIONS
-from components.services import ExcelService
 from components.au_locations import all_options, label_for
 
 
-def _apply_location_pick(source_key, other_key):
+def _on_location_pick():
     """
-    Shared on_change handler for both the Suburb and Postcode dropdowns --
-    whichever one the operator just picked from, confirm Suburb/Postcode/
-    State from that real record, and mirror the same confirmed label onto
-    the OTHER dropdown too, so both boxes agree instead of one silently
-    going stale.
+    on_change for the single Suburb/Postcode search box: fills Suburb,
+    Postcode and State from the confirmed locality record (all three always
+    change together, so they can never disagree). Clearing the box clears
+    all three.
     """
-    label = st.session_state.get(source_key)
-    if not label:
-        return
-    _, lookup = all_options()
-    match = lookup.get(label)
-    if not match:
-        return
-    st.session_state["suburb"] = match["suburb"]
-    st.session_state["postcode"] = match["postcode"]
-    st.session_state["state"] = match["state"]
-    st.session_state[other_key] = label
-
-
-def _on_suburb_pick():
-    _apply_location_pick("suburb_picker", "postcode_picker")
-
-
-def _on_postcode_pick():
-    _apply_location_pick("postcode_picker", "suburb_picker")
+    match = all_options()[1].get(st.session_state.get("location_picker"))
+    st.session_state["suburb"] = match["suburb"] if match else ""
+    st.session_state["postcode"] = match["postcode"] if match else ""
+    st.session_state["state"] = match["state"] if match else ""
 
 
 class FormComponent:
-    def __init__(self, session: SessionState, excel_service: ExcelService):
+    def __init__(self, session: SessionState):
         self.session = session
-        self.excel_service = excel_service
         self.priorities_list = [
             "Good schools nearby",
             "Public transport access",
@@ -85,34 +67,27 @@ class FormComponent:
                     st.session_state.get("state", ""),
                 )
 
-                # Real, live type-to-filter search over ~18k confirmed AU
-                # localities -- st.selectbox filters its options client-side
-                # as you type, with no rerun/blur needed per keystroke, so
-                # this behaves like a real search bar. Suburb and Postcode
-                # share the same option list/labels ("Suburb, STATE
-                # postcode"), so searching works from either field; picking
-                # from one confirms and fills all three (see _on_*_pick).
+                # One live type-to-filter search over ~18k confirmed AU
+                # localities. Labels are "Suburb, STATE postcode", and
+                # st.selectbox filters on the whole label client-side, so
+                # typing either a suburb name or a postcode finds it.
+                # Postcode and State below are read-only: they're always
+                # filled from the picked record (see _on_location_pick), so
+                # they can't drift out of sync with the suburb.
                 st.selectbox(
                     "Which suburb or area are you interested in?",
                     options=location_options,
                     index=location_options.index(current_label) if current_label else None,
-                    placeholder="Start typing a suburb name to search...",
-                    key="suburb_picker",
-                    on_change=_on_suburb_pick,
+                    placeholder="Search by suburb name or postcode...",
+                    key="location_picker",
+                    on_change=_on_location_pick,
                 )
 
                 loc_col1, loc_col2 = st.columns(2)
                 with loc_col1:
-                    st.selectbox(
-                        "Postcode",
-                        options=location_options,
-                        index=location_options.index(current_label) if current_label else None,
-                        placeholder="Start typing a postcode to search...",
-                        key="postcode_picker",
-                        on_change=_on_postcode_pick,
-                    )
+                    st.text_input("Postcode", placeholder="Auto-filled", key="postcode", disabled=True)
                 with loc_col2:
-                    st.text_input("State", placeholder="Auto-filled from Suburb/Postcode", key="state")
+                    st.text_input("State", placeholder="Auto-filled", key="state", disabled=True)
 
                 st.selectbox(
                     "What is your budget?",
@@ -128,10 +103,10 @@ class FormComponent:
 
         with col2:
             with st.container(border=True):
-                st.markdown("<h4>Sub-regional Priorities & Preferences</h4>", unsafe_allow_html=True)
+                st.markdown("<h4>What Matters Most</h4>", unsafe_allow_html=True)
 
                 text_muted = "#9c9484"
-                st.markdown(f"<p style='font-size:0.85rem; color:{text_muted}; margin-bottom:10px;'>Tap to select the features that matter most:</p>", unsafe_allow_html=True)
+                st.markdown(f"<p style='font-size:0.85rem; color:{text_muted}; margin-bottom:10px;'>Select everything the customer wants in their area -- the report will focus on these:</p>", unsafe_allow_html=True)
 
                 # Toggle-chip multi-select (replaces the old 2-column checkbox grid)
                 st.pills(
@@ -143,9 +118,11 @@ class FormComponent:
                     key="priorities_pills",
                 )
 
-        # --- Reset & Submit Buttons ---
+        # --- Reset Button ---
+        # There's no separate Submit step: the enquiry is recorded when the
+        # report is generated on "3. AI Report Generation".
         st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
-        btn_col1, btn_col2, btn_spacer = st.columns([1, 1, 4])
+        btn_col1, btn_col2, btn_spacer = st.columns([1, 1.4, 3.6])
 
         with btn_col1:
             if st.button("🔄 Reset", use_container_width=True, key="reset_btn"):
@@ -153,35 +130,7 @@ class FormComponent:
                 st.rerun()
 
         with btn_col2:
-            if st.button("✅ Submit", use_container_width=True, key="submit_btn"):
-                full_name = st.session_state.get("full_name", "").strip()
-                phone = st.session_state.get("phone", "").strip()
-                email = st.session_state.get("email", "").strip()
-                suburb_val = st.session_state.get("suburb", "").strip()
-                postcode_val = st.session_state.get("postcode", "").strip()
-                state_val = st.session_state.get("state", "").strip().upper()
-
-                if not full_name or not phone or not email or not suburb_val:
-                    st.error("❌ Full Name, Phone Number, Email Address, and Suburb/Area are required fields.")
-                else:
-                    try:
-                        # Extract priorities mapped to Yes/No
-                        selected_now = st.session_state.get("priorities_pills", []) or []
-                        priorities_yes_no = ["Yes" if p in selected_now else "No" for p in self.priorities_list]
-
-                        # Save via Excel Service
-                        next_id = self.excel_service.save_submission(
-                            full_name=full_name,
-                            phone=phone,
-                            email=email,
-                            property_type=st.session_state.get("property_type", "House"),
-                            suburb=suburb_val,
-                            postcode=postcode_val,
-                            state=state_val,
-                            budget=st.session_state.get("budget", ""),
-                            intention=st.session_state.get("intention", ""),
-                            priorities_yes_no=priorities_yes_no
-                        )
-                        st.success(f"✅ Submission saved to Excel successfully as {next_id}!")
-                    except Exception as e:
-                        st.error(f"❌ Failed to save: {e}")
+            st.button(
+                "Next: Data Source →", type="primary", use_container_width=True,
+                key="next_to_data_btn", on_click=SessionState.go_to_tab, args=(1,),
+            )

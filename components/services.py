@@ -1,12 +1,9 @@
 import os
-import datetime
-import openpyxl
 import json
 import asyncio
 import base64
 from io import BytesIO
 import pandas as pd
-from copy import copy
 from jinja2 import Environment, BaseLoader, Undefined
 from playwright.async_api import async_playwright
 from pypdf import PdfReader, PdfWriter
@@ -35,83 +32,6 @@ def _parse_llm_json(raw: str, provider_name: str) -> dict:
         raise ValueError(
             f"{provider_name} did not return valid JSON: {strict_error}\n--- raw response ---\n{raw[:2000]}"
         )
-
-
-class ExcelService:
-    def __init__(self, config: AppConfig):
-        self.config = config
-
-    def save_submission(self, full_name: str, phone: str, email: str,
-                        property_type: str, suburb: str, postcode: str, state: str,
-                        budget: str, intention: str, priorities_yes_no: list) -> str:
-        excel_path = self.config.excel_path
-        if not os.path.exists(excel_path):
-            raise FileNotFoundError(f"Excel file not found: {excel_path}")
-
-        wb = openpyxl.load_workbook(excel_path)
-        sheet = wb.active
-
-        # Find the last row with data in Column A (Submission ID)
-        last_row = 3
-        for r in range(4, sheet.max_row + 2):
-            if sheet.cell(row=r, column=1).value is not None:
-                last_row = r
-
-        # Generate Submission ID
-        last_id = sheet.cell(row=last_row, column=1).value
-        if last_id and isinstance(last_id, str) and last_id.startswith("SPG-"):
-            try:
-                num = int(last_id.split("-")[1])
-                next_id = f"SPG-{num + 1:03d}"
-            except (IndexError, ValueError):
-                next_id = "SPG-002"
-        else:
-            next_id = "SPG-001"
-
-        # Suburb, postcode, and state now come in as their own dedicated
-        # Customer Preferences form fields, so no more regex-splitting a
-        # single combined string is needed here.
-        suburb_clean = (suburb or "").strip()
-        postcode_clean = (postcode or "").strip()
-        state_clean = (state or "").strip().upper()
-
-        next_row = last_row + 1
-        date_submitted = datetime.date.today().strftime("%d/%m/%Y")
-
-        # Assemble row data (25 columns)
-        row_values = [
-            next_id,            # 1: Submission ID
-            date_submitted,     # 2: Date Submitted
-            full_name,          # 3: Full Name
-            email,              # 4: Email Address
-            phone,              # 5: Phone Number
-            property_type,      # 6: Property Type
-            suburb_clean,       # 7: Suburb / Area
-            postcode_clean,     # 8: Postcode
-            state_clean,        # 9: State
-            budget,             # 10: Budget Range
-            intention,          # 11: Buying Purpose
-        ]
-        # Append 11 priorities
-        row_values.extend(priorities_yes_no)
-        # Append remaining columns: Additional Notes (23), Report Status (24), Assigned To (25)
-        row_values.extend(["", "Pending", "Shoyeb"])
-
-        # Write to the cells and copy style if last_row has styles
-        for col_idx, val in enumerate(row_values, start=1):
-            new_cell = sheet.cell(row=next_row, column=col_idx, value=val)
-            if last_row >= 4:
-                src_cell = sheet.cell(row=last_row, column=col_idx)
-                if src_cell.has_style:
-                    new_cell.font = copy(src_cell.font)
-                    new_cell.border = copy(src_cell.border)
-                    new_cell.fill = copy(src_cell.fill)
-                    new_cell.number_format = copy(src_cell.number_format)
-                    new_cell.protection = copy(src_cell.protection)
-                    new_cell.alignment = copy(src_cell.alignment)
-
-        wb.save(excel_path)
-        return next_id
 
 
 class DataService:
@@ -220,6 +140,12 @@ class AnthropicService:
         return _parse_llm_json(raw, "Claude")
 
 
+class HtagNoMarketData(RuntimeError):
+    """HTAG answered, but holds no usable market data for that suburb/type
+    (HTTP 404, error "no_market_data") -- common for small or rural
+    localities. Not a failure of the app or the network."""
+
+
 class HtagService:
     ENDPOINT = "https://agent.htagai.com/micro-agents/agents/suburb-analysis/execute"
     COMPARISON_ENDPOINT = "https://agent.htagai.com/micro-agents/agents/suburb-comparison/execute"
@@ -266,7 +192,10 @@ class HtagService:
 
         cache_key = f"{suburb.strip().lower()}_{state.strip().lower()}_{str(postcode).strip()}_{pt_normalized}"
         if not force_refresh and cache_key in self._cache:
-            return self._cache[cache_key]
+            cached = self._cache[cache_key]
+            if isinstance(cached, HtagNoMarketData):
+                raise cached
+            return cached
 
         payload = {
             "suburb": suburb.strip(),
@@ -280,12 +209,19 @@ class HtagService:
         try:
             response = requests.post(self.ENDPOINT, headers=self._headers(), json=payload, timeout=120)
             if response.status_code != 200:
-                error_msg = response.text
+                error_msg, error_code = response.text, None
                 try:
                     err_json = response.json()
-                    error_msg = err_json.get("detail", response.text)
+                    error_msg = err_json.get("detail") or err_json.get("message") or response.text
+                    error_code = err_json.get("error")
                 except Exception:
                     pass
+                if error_code == "no_market_data":
+                    # Remembered like a normal result, so the same suburb
+                    # isn't re-asked on every rerun/report.
+                    no_data = HtagNoMarketData(error_msg)
+                    self._cache[cache_key] = no_data
+                    raise no_data
                 raise RuntimeError(f"HTAG API returned status {response.status_code}: {error_msg}")
 
             result = response.json()
@@ -295,6 +231,41 @@ class HtagService:
             raise TimeoutError("HTAG Suburb Analysis request timed out after 120 seconds. Please try again.")
         except requests.exceptions.RequestException as req_err:
             raise RuntimeError(f"Network communication with HTAG API failed: {req_err}")
+
+    # Max extra HTAG lookups when the suburb itself has no market data. A
+    # "no_market_data" answer comes back without running an analysis, so
+    # misses are cheap; the first hit ends the search.
+    MAX_NEARBY_ATTEMPTS = 4
+
+    def fetch_suburb_analysis_or_nearby(self, suburb: str, state: str = "", postcode: str = "",
+                                        property_type: str = "house"):
+        """
+        Like fetch_suburb_analysis(), but when HTAG has no market data for
+        this suburb (typical for small/rural localities) it tries the nearest
+        suburbs HTAG may cover instead: other localities sharing the postcode
+        first, then the closest postcodes in the same state.
+
+        Returns (data, stand_in) where stand_in is None if the data is for the
+        requested suburb itself, else the {"suburb","postcode","state"} record
+        the figures actually describe -- callers must label them as such.
+        Raises HtagNoMarketData if neither the suburb nor any candidate has data.
+        """
+        try:
+            return self.fetch_suburb_analysis(suburb, state, postcode, property_type), None
+        except HtagNoMarketData:
+            pass
+
+        from components.au_locations import market_stand_in_candidates
+        for cand in market_stand_in_candidates(suburb, postcode, state, count=self.MAX_NEARBY_ATTEMPTS):
+            try:
+                data = self.fetch_suburb_analysis(cand["suburb"], cand["state"], cand["postcode"], property_type)
+                return data, cand
+            except HtagNoMarketData:
+                continue
+        raise HtagNoMarketData(
+            f"HTAG has no {self._normalize_property_type(property_type)} market data for {suburb} "
+            "or the nearby suburbs checked."
+        )
 
     def fetch_suburb_comparison(self, suburbs: list, property_type: str = "house", force_refresh: bool = False) -> dict:
         """
@@ -435,6 +406,94 @@ class PdfService:
     # already carries its own consistent 12mm inset. Adding page-level
     # margin on top of that would reintroduce the double-margin bug.
     CONTENT_MARGIN_SIDE = "0mm"
+
+    # Printable height of one content page: A4 (297mm) minus the top and
+    # bottom margins reserved for the header/footer bands.
+    PRINTABLE_HEIGHT_MM = 297 - 14 - 14
+    # Slack kept free on each page: unbreakable cards inside a section get
+    # pushed down at page edges, so real layout runs a little longer than
+    # the measured heights.
+    PAGE_SAFETY_MM = 6
+    # A section too tall for any single page still gets a fresh page if less
+    # than this share of the current page is left -- otherwise its heading
+    # and a sliver of content would sit alone at the bottom.
+    MIN_TAIL_SHARE = 0.35
+
+    # Decides where each report section starts, the way a person laying out
+    # the document would: a section that doesn't fit in the space left on the
+    # current page starts on a new page (heading + content together), unless
+    # it's taller than a whole page anyway -- then it only moves if very
+    # little space is left. Works from the sections' real rendered heights,
+    # so it adapts to however much text the AI wrote.
+    _PAGINATE_JS = r"""
+    ({pageH, minTail}) => {
+        const body = document.querySelector('.report-body');
+        if (!body) return 0;
+        const avoids = el => getComputedStyle(el).breakInside === 'avoid';
+
+        // A "section" as the reader sees it: the block holding a section
+        // heading (h2.c-heading) plus every following sibling block -- its
+        // cards, charts, grids, notes -- up to the next heading. (.c-section
+        // alone only wraps the heading and intro paragraph.)
+        const groups = [];
+        for (const rs of body.querySelectorAll('.report-section')) {
+            for (const el of rs.children) {
+                const startsSection = el.matches('.c-heading') || el.querySelector('h2.c-heading');
+                if (startsSection || !groups.length) groups.push([]);
+                groups[groups.length - 1].push(el);
+            }
+        }
+
+        // Where a group would end (absolute print coordinates: page n spans
+        // [n*pageH, (n+1)*pageH)) if it started at `start`. Blocks the
+        // stylesheet marks unbreakable get pushed to the next page when they
+        // would straddle a page edge -- as Chromium does when printing -- so
+        // each push lengthens the group.
+        function endIfPlacedAt(els, start) {
+            const top = els[0].getBoundingClientRect().top;
+            const bottom = els[els.length - 1].getBoundingClientRect().bottom;
+            const blocks = [];
+            for (const el of els) {
+                for (const b of [el, ...el.querySelectorAll('*')]) {
+                    if (!avoids(b)) continue;
+                    let nested = false;
+                    for (let p = b.parentElement; p && p !== el.parentElement; p = p.parentElement) {
+                        if (avoids(p)) { nested = true; break; }
+                    }
+                    if (!nested) blocks.push(b);
+                }
+            }
+            let shift = 0;
+            for (const b of blocks) {
+                const br = b.getBoundingClientRect();
+                const bt = start + (br.top - top) + shift;
+                const pageEnd = (Math.floor(bt / pageH) + 1) * pageH;
+                if (br.height > 0 && br.height <= pageH && bt + br.height > pageEnd) shift += pageEnd - bt;
+            }
+            return start + (bottom - top) + shift;
+        }
+
+        let cursor = 0, prevBottom = body.getBoundingClientRect().top, breaks = 0;
+        for (const els of groups) {
+            const top = els[0].getBoundingClientRect().top;
+            const height = els[els.length - 1].getBoundingClientRect().bottom - top;
+            const start = cursor + (top - prevBottom);
+            const pageEnd = (Math.floor(start / pageH) + 1) * pageH;
+            const remaining = pageEnd - start;
+            const endHere = endIfPlacedAt(els, start);
+            const atPageTop = remaining >= pageH - 1;
+            if (endHere <= pageEnd || atPageTop || (height > pageH && remaining >= minTail)) {
+                cursor = endHere;
+            } else {
+                els[0].style.breakBefore = 'page';
+                breaks++;
+                cursor = endIfPlacedAt(els, pageEnd);
+            }
+            prevBottom = top + height;
+        }
+        return breaks;
+    }
+    """
 
     def __init__(self, config: AppConfig):
         self.config = config
@@ -666,7 +725,27 @@ class PdfService:
                         break-inside: auto !important;
                         page-break-inside: auto !important;
                     }
+
+                    /* Keep each section's heading block attached to the
+                       first content that follows it. */
+                    .c-section-header,
+                    .c-heading,
+                    .c-heading-line {
+                        break-after: avoid !important;
+                        page-break-after: avoid !important;
+                    }
                     """
+                )
+
+                # Measure sections with print styles applied, then insert
+                # page breaks before any section that would otherwise split
+                # awkwardly (see _PAGINATE_JS).
+                await content_page.emulate_media(media="print")
+                px_per_mm = 96 / 25.4
+                page_h = (self.PRINTABLE_HEIGHT_MM - self.PAGE_SAFETY_MM) * px_per_mm
+                await content_page.evaluate(
+                    self._PAGINATE_JS,
+                    {"pageH": page_h, "minTail": page_h * self.MIN_TAIL_SHARE},
                 )
 
                 content_pdf_bytes = await content_page.pdf(

@@ -2,13 +2,14 @@ import datetime
 import json
 import streamlit as st
 from components.config import SessionState, AppConfig
-from components.services import DataService, AnthropicService, HtagService, PdfService, TemplateService
+from components.services import DataService, AnthropicService, HtagService, HtagNoMarketData, PdfService, TemplateService
 from components.ui_utils import UiHelper
 from components.variable_mapper import build_standardized_property_payload
 from components.report_sanitizer import sanitize_report_data
 from components.osm_client import geocode_suburb, summarize_nearby
 from components.abs_client import summarize_region_stats
 from components.audit_log import log_report, LOG_PATH as AUDIT_LOG_PATH
+from components.submission_store import get_submission_store, STATUS_GENERATED, STATUS_FAILED
 
 AU_STATE_NAMES = {
     "NSW": "NEW SOUTH WALES",
@@ -122,15 +123,28 @@ class ReportGenerationComponent:
             """, unsafe_allow_html=True)
 
         with sum_col2:
-            generate_btn = st.button("✨ Generate AI Report", type="primary", use_container_width=True)
+            generate_btn = st.button("✨ Generate AI Report", type="primary", use_container_width=True, key="generate_btn")
 
         if generate_btn:
             # Check API key before execution
             if not self.config.anthropic_api_key:
                 st.error("❌ Cannot generate report: ANTHROPIC_API_KEY is missing. Please add it to your Cred.env file.")
                 return
-            elif not suburb.strip():
-                st.error("❌ Cannot generate report: please fill in the Suburb field on the '1. Customer Preferences' tab first.")
+
+            # The customer's details are required: every report is tied to a
+            # recorded enquiry, and the suburb drives all the data fetching.
+            required_fields = {
+                "Full Name": st.session_state.get("full_name", "").strip(),
+                "Phone Number": st.session_state.get("phone", "").strip(),
+                "Email Address": st.session_state.get("email", "").strip(),
+                "Suburb": suburb.strip(),
+            }
+            missing = [label for label, value in required_fields.items() if not value]
+            if missing:
+                st.error(
+                    f"❌ Cannot generate report: please fill in {', '.join(missing)} "
+                    "on the '1. Customer Preferences' tab first."
+                )
                 return
 
             # Suburb, postcode, and state are captured as their own fields on
@@ -145,7 +159,46 @@ class ReportGenerationComponent:
             if not state_str and postcode_str:
                 state_str = _state_from_postcode(postcode_str)
 
-            loader_placeholder = UiHelper.start_loader("Preparing suburb data...", self.session.theme, percent=8)
+            loader = UiHelper.start_loader(
+                f"Building your {suburb_clean} report",
+                [
+                    "Saving customer enquiry",
+                    "Live market data (HTAG)",
+                    "Nearby places (OpenStreetMap)",
+                    "Regional statistics (ABS)",
+                    "Writing the report (Claude)",
+                    "Assembling report pages",
+                    "Compiling PDF",
+                ],
+            )
+
+            # Record the enquiry before any slow API work, so the lead is kept
+            # even if HTAG/Claude/PDF later fails. A storage failure is shown
+            # to the operator but doesn't block the report itself.
+            submission_store, submission_id = None, None
+            try:
+                submission_store = get_submission_store(self.config)
+                submission_id = submission_store.add_submission({
+                    "full_name": required_fields["Full Name"],
+                    "phone": required_fields["Phone Number"],
+                    "email": required_fields["Email Address"],
+                    "property_type": property_type,
+                    "suburb": suburb_clean,
+                    "postcode": postcode_str,
+                    "state": state_str,
+                    "budget": budget,
+                    "intention": intention,
+                    "priorities_yes_no": ["Yes" if p in selected_priorities else "No" for p in self.priorities_list],
+                })
+            except Exception as store_err:
+                st.warning(f"⚠️ Could not record this customer enquiry: {store_err}")
+
+            def _set_submission_status(status):
+                if submission_store and submission_id:
+                    try:
+                        submission_store.update_status(submission_id, status)
+                    except Exception as status_err:
+                        st.warning(f"⚠️ Could not update enquiry {submission_id} status: {status_err}")
 
             try:
                 listings_records = []
@@ -181,19 +234,44 @@ class ReportGenerationComponent:
                 is_htag_mode = "HTAG" in self.session.data_source_mode
                 raw_api_payload = None
                 if enrich_with_real_data and suburb_clean and self.config.htag_api_key:
-                    htag_data = self.session.htag_data
-                    if not htag_data:
-                        try:
-                            htag_data = self.htag_service.fetch_suburb_analysis(
-                                suburb=suburb_clean,
-                                state=state_str,
-                                postcode=postcode_str,
-                                property_type=property_type
+                    # Always asked for THIS suburb/state/postcode/type --
+                    # HtagService caches per query, so a Tab 2 fetch for the
+                    # same location is reused instantly, but data fetched for
+                    # a previously selected suburb can never leak in here.
+                    loader.stage(1, f"Pulling live market data for {suburb_clean} from HTAG (or the nearest covered suburb) -- usually about a minute.",
+                                 start=6, end=34, expected_seconds=65)
+                    try:
+                        raw_api_payload, stand_in = self.htag_service.fetch_suburb_analysis_or_nearby(
+                            suburb=suburb_clean,
+                            state=state_str,
+                            postcode=postcode_str,
+                            property_type=property_type
+                        )
+                        if stand_in:
+                            stand_in_label = f"{stand_in['suburb']} ({stand_in['postcode']})"
+                            extra_context["htag_market_stand_in"] = {
+                                "requested_suburb": suburb_clean,
+                                "data_is_for": stand_in_label,
+                                "note": (
+                                    f"HTAG holds no market data for {suburb_clean}, so the HTAG market figures "
+                                    f"in this payload are for nearby {stand_in_label}."
+                                ),
+                            }
+                            st.info(
+                                f"ℹ️ HTAG has no {property_type.lower()} market data for **{suburb_clean}** "
+                                f"(common for small or rural localities), so the report uses nearby "
+                                f"**{stand_in_label}** as the market reference and says so in the report."
                             )
-                            self.session.htag_data = htag_data
-                        except Exception as htag_err:
-                            st.warning(f"⚠️ Could not auto-fetch HTAG API data: {htag_err}")
-                    raw_api_payload = htag_data
+                    except HtagNoMarketData:
+                        st.info(
+                            f"ℹ️ HTAG has no {property_type.lower()} market data for **{suburb_clean}** or the "
+                            "nearby suburbs checked. The report still uses real ABS Census and OpenStreetMap "
+                            "data; market figures will be estimates and labelled as such."
+                        )
+                    except Exception as htag_err:
+                        st.warning(f"⚠️ Could not reach HTAG for live market data: {htag_err}")
+                else:
+                    loader.skip(1)
 
                 if not is_htag_mode:
                     # Upload File Mode (CSV / Excel) -- layers real listings
@@ -240,9 +318,8 @@ class ReportGenerationComponent:
                 # never block report generation.
                 coords = None
                 if enrich_with_real_data:
-                    UiHelper.update_loader(
-                        loader_placeholder, "Finding nearby places (OpenStreetMap)...", 14, self.session.theme
-                    )
+                    loader.stage(2, "Finding real schools, shops, transport and parks nearby...",
+                                 start=34, end=42, expected_seconds=12)
                     try:
                         coords = geocode_suburb(suburb_clean, state_str, postcode_str)
                         if coords:
@@ -260,9 +337,11 @@ class ReportGenerationComponent:
                 # unreachable or the LGA having no published data just means
                 # this key is absent, never a blocked report.
                 if enrich_with_real_data:
-                    UiHelper.update_loader(
-                        loader_placeholder, "Fetching regional statistics (ABS)...", 17, self.session.theme
-                    )
+                    loader.stage(3, "Reading Census 2021 income, rent and population figures for the area...",
+                                 start=42, end=48, expected_seconds=10)
+                else:
+                    loader.skip(2)
+                    loader.skip(3)
                 try:
                     if enrich_with_real_data and coords:
                         abs_summary = summarize_region_stats(coords[0], coords[1])
@@ -281,11 +360,8 @@ class ReportGenerationComponent:
                     extra_context=extra_context
                 )
 
-                UiHelper.update_loader(
-                    loader_placeholder,
-                    f"{ai_model_label} is analyzing suburb data and composing your report...",
-                    20, self.session.theme
-                )
+                loader.stage(4, f"{ai_model_label} is analysing all the data and writing each section -- the longest step, typically 1-2 minutes.",
+                             start=48, end=86, expected_seconds=100)
 
                 # Assemble prompt asking AI for STRUCTURED JSON ONLY
                 full_prompt = f"""<system_prompt>
@@ -355,6 +431,14 @@ You are the primary AI Engine for SmartPropGuide. Your task is to process a pre-
      LGA -- use these for any population/growth claims in "growth" or "community" instead of
      guessing.
 
+   - `extra_variables.htag_market_stand_in`, when present, means HTAG had no market data for the
+     client's suburb, so every HTAG-sourced market figure in this payload (prices, growth, rents,
+     yield, vacancy, days on market, `htag_research_narrative`) actually describes the nearby suburb
+     named in `data_is_for`. You MUST say so plainly wherever those figures appear -- at minimum in
+     the "snapshot" and "affordability" summaries (e.g. "There isn't enough sales activity in
+     Anniebrook to track its own market, so these figures are for nearby Busselton, the closest
+     comparable market") -- and never present them as the client's suburb's own numbers.
+
 4. OUTPUT INSTRUCTIONS:
    - Generate ONLY a single valid JSON object containing the required report data structure below.
    - Do NOT wrap in conversational intro/outro text, meta-commentary, or HTML markup.
@@ -392,7 +476,8 @@ Return a single JSON object with EXACTLY these top-level keys matching the repor
 
                 report_data = self.anthropic_service.generate_report_data(full_prompt)
 
-                UiHelper.update_loader(loader_placeholder, "Structuring your report...", 75, self.session.theme)
+                loader.stage(5, "Checking the data and laying out the report pages...",
+                             start=86, end=89, expected_seconds=3)
 
                 # Repair the AI's JSON before it ever reaches the template: guarantees
                 # every field the template loops/does chart math over exists with a
@@ -456,20 +541,25 @@ Return a single JSON object with EXACTLY these top-level keys matching the repor
                 # disappears that Playwright's headless-Chromium PDF pass causes --
                 # now the loader covers the whole pipeline, and the PDF is only
                 # ever regenerated when a new report is actually produced.
-                UiHelper.update_loader(loader_placeholder, "Compiling your PDF report...", 88, self.session.theme)
+                loader.stage(6, "Printing the PDF with charts and branding...",
+                             start=89, end=100, expected_seconds=15)
                 self.session.generated_pdf_bytes = None
                 try:
                     self.session.generated_pdf_bytes = self.pdf_service.convert_html_to_pdf(report_html)
                 except Exception as pdf_err:
                     st.warning(f"⚠️ Report generated, but PDF compilation failed: {pdf_err}")
 
-                UiHelper.update_loader(loader_placeholder, "Done!", 100, self.session.theme)
+                _set_submission_status(STATUS_GENERATED)
+                loader.finish("Your report is ready!")
                 st.success(f"✅ Report generated successfully using {ai_model_label}!")
+                if submission_id:
+                    st.info(f"ℹ️ Customer enquiry recorded as **{submission_id}** in {submission_store.location_label}.")
 
             except Exception as e:
+                _set_submission_status(STATUS_FAILED)
                 st.error(f"❌ Failed to generate report: {e}")
             finally:
-                UiHelper.stop_loader(loader_placeholder)
+                UiHelper.stop_loader(loader)
 
         # Render generated HTML report & PDF compilation controls
         if self.session.generated_report_html:
@@ -480,11 +570,14 @@ Return a single JSON object with EXACTLY these top-level keys matching the repor
             if pdf_bytes:
                 clean_suburb_name = suburb.replace(' ', '_') if suburb else 'Property'
                 st.download_button(
-                    label="📥 Download PDF Report",
+                    label="Download PDF Report",
+                    icon=":material/download:",
                     data=pdf_bytes,
                     file_name=f"SmartPropGuid_Report_{clean_suburb_name}.pdf",
                     mime="application/pdf",
-                    use_container_width=True
+                    use_container_width=True,
+                    type="primary",
+                    key="download_pdf_btn",
                 )
             else:
                 st.error("Could not compile HTML to PDF. Check if the HTML template format has errors.")

@@ -1,6 +1,75 @@
 import os
+import time
 import base64
+import html
 import streamlit as st
+
+
+class ProgressLoader:
+    """
+    Full-screen progress overlay for a multi-step pipeline (fetching HTAG
+    data, generating a report...).
+
+    The caller moves through real steps with stage(); each step owns a slice
+    of the bar (start -> end percent). Inside a step the bar eases from start
+    toward end over that step's typical duration, purely in CSS (no reruns),
+    and never crosses into the next step's slice until the code actually
+    reaches it -- so the motion is smooth but the position stays honest:
+    a slow API call just makes the bar settle near the end of its slice.
+    A live elapsed-seconds counter shows the app is still working.
+    """
+
+    def __init__(self, title: str, steps: list):
+        self.title = title
+        self.steps = list(steps)
+        self.skipped = set()
+        self.started_at = time.monotonic()
+        self.renders = 0
+        self.placeholder = st.empty()
+        self.stage(0, steps[0] if steps else "", start=0, end=4, expected_seconds=3)
+
+    def skip(self, index: int):
+        """Marks a step as not applicable for this run (shown struck through)."""
+        self.skipped.add(index)
+
+    def stage(self, index: int, message: str, start: int, end: int, expected_seconds: float = 10):
+        self.renders += 1
+        elapsed = int(time.monotonic() - self.started_at)
+        # Animation names alternate per render so the browser restarts the
+        # easing from this stage's start instead of continuing the old one.
+        flip = self.renders % 2
+        items = []
+        for i, label in enumerate(self.steps):
+            if i in self.skipped:
+                state = "skipped"
+            elif i < index:
+                state = "done"
+            elif i == index:
+                state = "active"
+            else:
+                state = "pending"
+            items.append(f'<li class="lp-step lp-{state}"><span class="lp-dot"></span>{html.escape(label)}</li>')
+
+        self.placeholder.markdown(
+            f'''<div class="loader-overlay"><div class="loader-container">
+                <div class="lp-title">{html.escape(self.title)}</div>
+                <div class="lp-percent" style="--from:{start};--to:{max(start, end - 1)};--dur:{expected_seconds}s;animation-name:lp-ease{flip};"></div>
+                <div class="loader-progress-wrap">
+                    <div class="loader-progress-fill" style="--from:{start};--to:{max(start, end - 1)};--dur:{expected_seconds}s;animation-name:lp-ease{flip},loader-flow;"></div>
+                </div>
+                <p class="loader-text">{html.escape(message)}</p>
+                <ul class="lp-steps">{"".join(items)}</ul>
+                <div class="lp-elapsed" style="--t0:{elapsed};animation-name:lp-tick{flip};"></div>
+            </div></div>''',
+            unsafe_allow_html=True,
+        )
+
+    def finish(self, message: str = "Done!"):
+        self.stage(len(self.steps), message, start=100, end=101, expected_seconds=0.1)
+
+    def stop(self):
+        self.placeholder.empty()
+
 
 class UiHelper:
     @staticmethod
@@ -24,54 +93,14 @@ class UiHelper:
         return f"data:image/png;base64,{b64}"
 
     @staticmethod
-    def start_loader(message: str, theme: str = "dark", percent: int = 5):
-        """Creates the loader placeholder and renders its first stage.
-        Call update_loader() on the returned placeholder as the report
-        pipeline actually reaches each later stage -- see update_loader()."""
-        placeholder = st.empty()
-        UiHelper.update_loader(placeholder, message, percent, theme)
-        return placeholder
+    def start_loader(title: str, steps: list) -> "ProgressLoader":
+        """Opens the full-screen progress overlay. See ProgressLoader."""
+        return ProgressLoader(title, steps)
 
     @staticmethod
-    def update_loader(placeholder, message: str, percent: int, theme: str = "dark"):
-        """
-        Re-renders the same loader placeholder with a new stage label and
-        percentage. The percentage is driven by real checkpoints the report
-        generation code has actually reached (data prep done, AI response
-        received, PDF compiled, etc. -- see report_generation.py) rather than
-        a timer guessing elapsed time, so the bar's position always reflects
-        genuine pipeline progress. The gold fill's diagonal shimmer animation
-        is purely decorative "still working" motion layered on top of that
-        real width -- it doesn't claim to know sub-progress within a stage
-        (e.g. how far through Claude's response we are), since that isn't
-        observable without response streaming.
-        """
-        is_dark = theme == "dark"
-        text_color = "#f4f1ea" if is_dark else "#162338"
-        text_muted = "#9c9484" if is_dark else "#7c7360"
-        percent = max(0, min(100, percent))
-
-        # Rendered as a fixed full-viewport overlay (not an inline block) so
-        # the rest of the app is visibly dimmed/blurred and can't be clicked
-        # while a report is generating.
-        placeholder.markdown(
-            f'''<div class="loader-overlay">
-                    <div class="loader-container">
-                        <div class="loader-spinner"></div>
-                        <div class="loader-percent" style="color: {text_color};">{percent}%</div>
-                        <div class="loader-progress-wrap">
-                            <div class="loader-progress-fill" style="width: {percent}%;"></div>
-                        </div>
-                        <p class="loader-text" style="color: {text_muted};">{message}</p>
-                    </div>
-                </div>''',
-            unsafe_allow_html=True,
-        )
-
-    @staticmethod
-    def stop_loader(placeholder):
-        if placeholder:
-            placeholder.empty()
+    def stop_loader(loader):
+        if loader:
+            loader.stop()
 
     @staticmethod
     def inject_custom_css(theme: str):
@@ -121,10 +150,89 @@ class UiHelper:
             }}
 
             /* Loader – a full-screen blurred, unclickable overlay (like a
-               modal) holding a real, stage-driven progress bar (see
-               UiHelper.update_loader) plus a standard spinning ring so the
-               page still visibly "feels alive" between stage checkpoints,
-               not just a bar that sits still. */
+               modal) holding ProgressLoader's step list and progress bar.
+               --p is a registered integer so it can be animated (eased) and
+               also printed as the percentage via a CSS counter. */
+            @property --p {{ syntax: '<integer>'; inherits: false; initial-value: 0; }}
+            @property --t {{ syntax: '<integer>'; inherits: false; initial-value: 0; }}
+            @keyframes lp-ease0 {{ from {{ --p: var(--from); }} to {{ --p: var(--to); }} }}
+            @keyframes lp-ease1 {{ from {{ --p: var(--from); }} to {{ --p: var(--to); }} }}
+            @keyframes lp-tick0 {{ from {{ --t: var(--t0); }} to {{ --t: calc(var(--t0) + 3600); }} }}
+            @keyframes lp-tick1 {{ from {{ --t: var(--t0); }} to {{ --t: calc(var(--t0) + 3600); }} }}
+            .lp-title {{
+                font-family: 'Playfair Display', serif;
+                font-size: 1.15rem;
+                font-weight: 700;
+                color: {text_color};
+                margin-bottom: 0.4rem;
+            }}
+            .lp-percent {{
+                font-size: 2.2rem;
+                font-weight: 700;
+                color: {accent_color};
+                font-variant-numeric: tabular-nums;
+                animation-duration: var(--dur);
+                animation-timing-function: cubic-bezier(0.15, 0.7, 0.3, 1);
+                animation-fill-mode: forwards;
+                counter-reset: pct var(--p);
+            }}
+            .lp-percent::after {{ content: counter(pct) "%"; }}
+            .lp-steps {{
+                list-style: none;
+                width: 100%;
+                margin: 1.1rem 0 0;
+                padding: 0.9rem 0 0;
+                border-top: 1px solid {border_color};
+            }}
+            .lp-step {{
+                display: flex;
+                align-items: center;
+                gap: 0.6rem;
+                font-size: 0.84rem;
+                padding: 0.22rem 0;
+                color: {text_dim};
+            }}
+            .lp-dot {{
+                flex: 0 0 auto;
+                width: 16px;
+                height: 16px;
+                border-radius: 50%;
+                border: 2px solid {border_color};
+                box-sizing: border-box;
+            }}
+            .lp-done {{ color: {text_muted}; }}
+            .lp-done .lp-dot {{
+                background: {accent_color};
+                border-color: {accent_color};
+                position: relative;
+            }}
+            .lp-done .lp-dot::after {{
+                content: "";
+                position: absolute;
+                left: 4px; top: 1px;
+                width: 4px; height: 8px;
+                border: solid #162338;
+                border-width: 0 2px 2px 0;
+                transform: rotate(45deg);
+            }}
+            .lp-active {{ color: {text_color}; font-weight: 600; }}
+            .lp-active .lp-dot {{
+                border-color: {border_color};
+                border-top-color: {accent_color};
+                animation: loader-spin 0.8s linear infinite;
+            }}
+            .lp-skipped {{ text-decoration: line-through; opacity: 0.55; }}
+            .lp-elapsed {{
+                margin-top: 0.9rem;
+                font-size: 0.75rem;
+                color: {text_dim};
+                font-variant-numeric: tabular-nums;
+                animation-duration: 3600s;
+                animation-timing-function: linear;
+                animation-fill-mode: forwards;
+                counter-reset: secs var(--t);
+            }}
+            .lp-elapsed::after {{ content: counter(secs) "s elapsed"; }}
             .loader-overlay {{
                 position: fixed;
                 inset: 0;
@@ -144,52 +252,44 @@ class UiHelper:
                 padding: 2rem 2.25rem;
                 background: {card_color};
                 border: 1px solid {border_color};
-                border-radius: 14px;
-                width: 300px;
+                border-radius: 16px;
+                width: min(380px, calc(100vw - 32px));
                 box-shadow: 0 12px 40px rgba(0,0,0,0.4);
-            }}
-            .loader-spinner {{
-                width: 42px;
-                height: 42px;
-                border-radius: 50%;
-                border: 4px solid {bg_subtle};
-                border-top-color: {accent_color};
-                animation: loader-spin 0.85s linear infinite;
-                margin-bottom: 1rem;
             }}
             @keyframes loader-spin {{
                 to {{ transform: rotate(360deg); }}
             }}
-            .loader-percent {{
-                font-family: 'DM Sans', sans-serif;
-                font-size: 1.4rem;
-                font-weight: 700;
-            }}
             .loader-progress-wrap {{
                 width: 100%;
                 height: 8px;
-                background: {bg_subtle};
+                background: {border_color};
                 border-radius: 4px;
                 overflow: hidden;
                 margin-top: 0.7rem;
             }}
             .loader-progress-fill {{
                 height: 100%;
+                width: calc(var(--p) * 1%);
                 border-radius: 4px;
                 background: linear-gradient(90deg, #b58b33, #d7b35e, #f0d9a8, #d7b35e, #b58b33);
                 background-size: 200% 100%;
-                animation: loader-flow 1.8s linear infinite;
-                transition: width 0.6s ease;
+                /* animation-name is set inline: lp-ease0/1 (width) + loader-flow (shimmer) */
+                animation-duration: var(--dur), 1.8s;
+                animation-timing-function: cubic-bezier(0.15, 0.7, 0.3, 1), linear;
+                animation-iteration-count: 1, infinite;
+                animation-fill-mode: forwards, none;
             }}
             @keyframes loader-flow {{
                 0% {{ background-position: 0% 0; }}
                 100% {{ background-position: -200% 0; }}
             }}
             .loader-text {{
-                margin-top: 0.9rem;
+                margin: 0.8rem 0 0;
                 font-size: 0.85rem;
                 letter-spacing: 0.02em;
                 text-align: center;
+                color: {text_muted};
+                min-height: 2.4em;
             }}
 
             /* Tabs (pill-style navigation) -- current Streamlit renders these as
@@ -322,6 +422,25 @@ class UiHelper:
                 color: {text_color} !important;
                 border-radius: 8px !important;
             }}
+            /* Auto-filled read-only fields (Postcode / State): keep the value
+               fully readable -- Streamlit's default disabled styling fades it
+               to near-invisible -- with a faint gold tint marking it auto-filled. */
+            .stTextInput input:disabled {{
+                color: {text_color} !important;
+                -webkit-text-fill-color: {text_color} !important;
+                opacity: 1 !important;
+                font-weight: 600 !important;
+                background-color: transparent !important;
+                border: none !important;
+                cursor: default !important;
+            }}
+            /* ...the grey disabled background is painted by the input's
+               wrapper div, so the tint goes there. */
+            .stTextInput div:has(> input:disabled) {{
+                background-color: rgba(215, 179, 94, 0.10) !important;
+                border: 1px dashed rgba(215, 179, 94, 0.45) !important;
+                border-radius: 8px !important;
+            }}
             .stSelectbox input,
             .stMultiSelect input {{
                 background-color: transparent !important;
@@ -360,7 +479,9 @@ class UiHelper:
             }}
 
             /* Placeholder text color */
-            .stTextInput input::placeholder {{
+            .stTextInput input::placeholder,
+            .stSelectbox input::placeholder,
+            .stTextArea textarea::placeholder {{
                 color: {text_dim} !important;
                 opacity: 1 !important;
             }}
@@ -458,38 +579,96 @@ class UiHelper:
                 color: #162338 !important;
             }}
 
-            /* Priorities picker (st.pills, selection_mode="multi") -- rendered
-               as a role="group" of toggle buttons. Selected state uses the
-               brand gold rather than Streamlit's default red accent, to
-               match the rest of the app. */
-            [data-testid="stPills"] {{
-                gap: 0.5rem !important;
-            }}
-            [data-testid="stPills"] button,
-            [data-testid="stPillsButton"] {{
+            /* Chip pickers (st.pills: priorities, prompt suggestions) --
+               rendered as button[data-variant="pills"] inside a
+               stButtonGroup. Selected = solid brand gold, so a picked chip
+               reads as "yes, this", never as an error/red state. */
+            [data-testid="stButtonGroup"] button[data-variant="pills"] {{
                 background-color: {bg_subtle} !important;
                 border: 1px solid {border_color} !important;
-                color: {text_color} !important;
                 border-radius: 999px !important;
+                transition: all 0.15s ease !important;
             }}
-            [data-testid="stPills"] button:hover,
-            [data-testid="stPillsButton"]:hover {{
+            [data-testid="stButtonGroup"] button[data-variant="pills"] p {{
+                color: {text_color} !important;
+            }}
+            [data-testid="stButtonGroup"] button[data-variant="pills"]:hover {{
                 border-color: {accent_color} !important;
             }}
-            [data-testid="stPills"] button[aria-pressed="true"],
-            [data-testid="stPills"] button[data-selected="true"],
-            [data-testid="stPillsButton"][aria-pressed="true"],
-            [data-testid="stPillsButton"][data-selected="true"] {{
+            [data-testid="stButtonGroup"] button[data-variant="pills"][aria-pressed="true"] {{
                 background-color: {accent_color} !important;
                 border-color: {accent_color} !important;
+                box-shadow: 0 2px 8px rgba(215, 179, 94, 0.35) !important;
             }}
-            [data-testid="stPills"] button[aria-pressed="true"] p,
-            [data-testid="stPills"] button[data-selected="true"] p,
-            [data-testid="stPillsButton"][aria-pressed="true"] p,
-            [data-testid="stPillsButton"][data-selected="true"] p {{
+            [data-testid="stButtonGroup"] button[data-variant="pills"][aria-pressed="true"] p {{
                 color: #162338 !important;
                 font-weight: 600 !important;
             }}
+
+            /* Primary call-to-action buttons (Generate AI Report, Next) --
+               solid brand gold so they stand out from the navy secondary
+               buttons instead of blending in. */
+            button[data-testid="stBaseButton-primary"] {{
+                background: linear-gradient(135deg, #e3c477 0%, {accent_color} 55%, #c49a42 100%) !important;
+                border: 1px solid #c49a42 !important;
+                color: #162338 !important;
+                font-weight: 700 !important;
+                box-shadow: 0 6px 18px rgba(215, 179, 94, 0.28) !important;
+                transition: transform 0.15s ease, box-shadow 0.15s ease !important;
+            }}
+            button[data-testid="stBaseButton-primary"]:hover {{
+                transform: translateY(-1px);
+                box-shadow: 0 10px 24px rgba(215, 179, 94, 0.4) !important;
+            }}
+            button[data-testid="stBaseButton-primary"] p,
+            button[data-testid="stBaseButton-primary"] span {{
+                color: #162338 !important;
+                font-weight: 700 !important;
+            }}
+            /* The big calls to action: Generate AI Report and Download PDF */
+            .st-key-generate_btn button,
+            .st-key-download_pdf_btn button {{
+                min-height: 4.2rem !important;
+                border-radius: 12px !important;
+            }}
+            .st-key-generate_btn button p,
+            .st-key-download_pdf_btn button p {{
+                font-size: 1.15rem !important;
+                letter-spacing: 0.01em;
+            }}
+
+            /* HTAG fetch: gold-outline secondary action -- branded, but
+               visually below the solid-gold primary buttons. */
+            .st-key-htag_fetch_btn button {{
+                min-height: 3rem !important;
+                background: rgba(215, 179, 94, 0.08) !important;
+                border: 1.5px solid {accent_color} !important;
+                border-radius: 10px !important;
+                transition: background 0.15s ease !important;
+            }}
+            .st-key-htag_fetch_btn button:hover {{
+                background: rgba(215, 179, 94, 0.18) !important;
+            }}
+            .st-key-htag_fetch_btn button p,
+            .st-key-htag_fetch_btn button span {{
+                color: {accent_color} !important;
+                font-weight: 600 !important;
+            }}
+
+            /* Read-only location summary chips (Tab 1 + Tab 2) */
+            .loc-chip {{
+                display: inline-flex;
+                align-items: center;
+                gap: 0.4rem;
+                padding: 0.35rem 0.75rem;
+                margin: 0 0.4rem 0.4rem 0;
+                border-radius: 999px;
+                background: rgba(215, 179, 94, 0.12);
+                border: 1px solid rgba(215, 179, 94, 0.35);
+                color: {text_color};
+                font-size: 0.85rem;
+            }}
+            .loc-chip b {{ color: {accent_color}; font-weight: 600; }}
         </style>
         """
         st.markdown(css, unsafe_allow_html=True)

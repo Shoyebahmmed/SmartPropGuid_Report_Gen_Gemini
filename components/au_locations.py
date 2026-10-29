@@ -63,6 +63,53 @@ def label_for(suburb, postcode, state):
     return label if label in lookup else None
 
 
+def _rank_main_towns(rows):
+    """Orders localities so the likely main town comes first: a name that
+    other localities in the group build on ("Busselton" <- "West
+    Busselton", "Richmond" <- "Richmond East") is usually the larger,
+    better-covered centre. Shorter names win ties."""
+    names = [r["suburb"].lower() for r in rows]
+
+    def score(r):
+        n = r["suburb"].lower()
+        return sum(1 for other in names if other != n and n in other)
+
+    return sorted(rows, key=lambda r: (-score(r), len(r["suburb"])))
+
+
+def market_stand_in_candidates(suburb, postcode, state, count=4):
+    """
+    Suburbs to try, in order, when HTAG has no market data for `suburb`
+    (see HtagService.fetch_suburb_analysis_or_nearby): up to two likely
+    main towns sharing its postcode, then the likely main town of each
+    numerically closest postcode in the same state. Delivery-centre ("Dc")
+    entries are skipped -- they're mail depots, not suburbs.
+    """
+    state = (state or "").strip().upper()
+    suburb_norm = (suburb or "").strip().lower()
+    try:
+        target_pc = int(postcode)
+    except (TypeError, ValueError):
+        return []
+
+    by_postcode = {}
+    for row in _load()[1].values():
+        name = row["suburb"].strip().lower()
+        if row["state"] != state or name == suburb_norm or name.endswith(" dc"):
+            continue
+        try:
+            by_postcode.setdefault(int(row["postcode"]), []).append(row)
+        except ValueError:
+            continue
+
+    picked = _rank_main_towns(by_postcode.pop(target_pc, []))[:2]
+    for pc in sorted(by_postcode, key=lambda pc: abs(pc - target_pc)):
+        if len(picked) >= count:
+            break
+        picked.append(_rank_main_towns(by_postcode[pc])[0])
+    return picked[:count]
+
+
 def nearby_candidates(suburb, postcode, state, count=2):
     """
     A free, offline proxy for "nearby suburbs": the `count` other real

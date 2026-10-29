@@ -20,6 +20,15 @@ BUDGET_RANGES = {
 }
 BUDGET_OPTIONS = list(BUDGET_RANGES.keys())
 
+# Main navigation tabs. st.tabs is keyed (ACTIVE_TAB_KEY) so the Next/Back
+# buttons can switch tabs by writing the target label into session state.
+TAB_LABELS = [
+    "📋 1. Customer Preferences",
+    "📂 2. Data Source",
+    "✨ 3. AI Report Generation",
+]
+ACTIVE_TAB_KEY = "active_tab"
+
 
 class AppConfig:
     def __init__(self):
@@ -56,6 +65,23 @@ class AppConfig:
     @property
     def claude_model(self) -> str:
         return os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
+
+    # Google Sheets enquiry log (see submission_store.py). Both must be set
+    # to use it; otherwise enquiries fall back to the local Excel file.
+    @property
+    def google_sheets_id(self) -> str:
+        return os.environ.get("GOOGLE_SHEETS_ID", "").strip()
+
+    @property
+    def google_service_account_file(self) -> str:
+        path = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
+        if path and not os.path.isabs(path):
+            path = os.path.join(self.project_root, path)
+        return path
+
+    @property
+    def assigned_to(self) -> str:
+        return os.environ.get("ASSIGNED_TO", "Shoyeb")
 
     def get_asset_path(self, filename: str) -> str:
         return os.path.join(self.project_root, filename)
@@ -116,6 +142,13 @@ class SessionState:
     def toggle_theme(self):
         self.theme = "light" if self.theme == "dark" else "dark"
 
+    @staticmethod
+    def go_to_tab(index: int):
+        """on_click callback for Next/Back: switches the active tab and asks
+        App.run() to scroll back to the top of the page."""
+        st.session_state[ACTIVE_TAB_KEY] = TAB_LABELS[index]
+        st.session_state["scroll_to_top"] = True
+
     @property
     def data_source_mode(self) -> str:
         return st.session_state.get("data_source_mode", "🌐 Live HTAG Suburb Analysis API")
@@ -168,9 +201,6 @@ class SessionState:
         for k in self.FORM_DEFAULTS.keys():
             if k in st.session_state:
                 del st.session_state[k]
-        for k in (
-            "priorities_pills",
-            "suburb_picker", "postcode_picker",
-        ):
+        for k in ("priorities_pills", "location_picker"):
             if k in st.session_state:
                 del st.session_state[k]

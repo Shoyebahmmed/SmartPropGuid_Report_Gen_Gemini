@@ -1,9 +1,24 @@
 import pandas as pd
 import streamlit as st
 from components.config import SessionState, AppConfig
-from components.services import HtagService
+from components.services import HtagService, HtagNoMarketData
 from components.ui_utils import UiHelper
 from components.variable_mapper import build_standardized_property_payload
+
+# Ready-made focus areas for the AI, offered as click-to-add chips on Tab 2.
+# The first is the original default instruction, pre-selected.
+PROMPT_SUGGESTIONS = [
+    "Focus on capital growth trends, school catchments and transport access",
+    "Investor lens: rental yield, vacancy rates and cash flow",
+    "First-home buyer: affordability, entry-level prices and government grants",
+    "Family needs: school zones, parks, childcare and safe streets",
+    "Be clear and upfront about flood, bushfire and planning risks",
+    "Compare value against nearby suburbs at a similar price",
+    "Commute times to the CBD and major job hubs",
+    "Upcoming infrastructure and developments that could lift values",
+    "Downsizer needs: low maintenance, healthcare and quiet streets",
+    "Keep the tone simple and reassuring for a first-time buyer",
+]
 
 class DataSelectionComponent:
     def __init__(self, session: SessionState, config: AppConfig, htag_service: HtagService = None):
@@ -85,43 +100,54 @@ class DataSelectionComponent:
                 # Live HTAG API Integration
                 st.markdown(f"<p style='font-size:0.8rem; color:{text_muted}; margin-top:0.5rem;'>Fetch real-time institutional suburb intelligence from HTAG Analytics.</p>", unsafe_allow_html=True)
 
-                # Suburb, state, and postcode are entered once on the Customer
-                # Preferences form (Step 1) and reused here -- shown read-only
-                # so operators don't have to retype the same location twice.
+                # Location and property type come straight from Step 1 and are
+                # shown as plain text, not widgets: a keyless widget here can
+                # keep displaying its first value after Step 1 changes, which
+                # made Tab 2 look like it was using a stale suburb/state.
                 api_suburb = st.session_state.get("suburb", "").strip()
                 api_state = st.session_state.get("state", "").strip()
                 api_postcode = st.session_state.get("postcode", "").strip()
-                prop_type_val = st.session_state.get("property_type", "House")
+                api_prop_type = st.session_state.get("property_type", "House")
+                current_query = (api_suburb.lower(), api_state.upper(), api_postcode, api_prop_type)
 
                 if not api_suburb:
-                    st.warning("⚠️ No suburb set yet. Go back to **1. Customer Preferences** and fill in the Suburb, State, and Postcode fields first.")
-
-                h_col1, h_col2 = st.columns(2)
-                with h_col1:
-                    st.text_input("Suburb Name", value=api_suburb or "Not set", disabled=True)
-                    st.text_input("State", value=api_state or "Not set", disabled=True)
-                with h_col2:
-                    st.text_input("Postcode", value=api_postcode or "Not set", disabled=True)
-                    api_prop_type = st.selectbox(
-                        "Property Type",
-                        options=["House", "Unit", "Townhouse", "Land"],
-                        index=["House", "Unit", "Townhouse", "Land"].index(prop_type_val) if prop_type_val in ["House", "Unit", "Townhouse", "Land"] else 0,
-                        key="htag_input_proptype"
+                    st.warning("⚠️ No suburb set yet. Go back to **1. Customer Preferences** and search for the suburb first.")
+                else:
+                    st.markdown(
+                        f'<span class="loc-chip">Suburb <b>{api_suburb}</b></span>'
+                        f'<span class="loc-chip">Postcode <b>{api_postcode or "—"}</b></span>'
+                        f'<span class="loc-chip">State <b>{api_state or "—"}</b></span>'
+                        f'<span class="loc-chip">Property <b>{api_prop_type}</b></span>',
+                        unsafe_allow_html=True,
                     )
 
-                if st.button("⚡ Fetch Suburb Data from HTAG API", use_container_width=True, type="secondary"):
+                if st.button("Fetch Suburb Data from HTAG", icon=":material/query_stats:", use_container_width=True,
+                             type="secondary", key="htag_fetch_btn"):
                     if not api_suburb:
-                        st.error("Please fill in the Suburb field on the Customer Preferences tab before fetching from HTAG.")
+                        st.error("Please pick a suburb on the Customer Preferences tab before fetching from HTAG.")
                     else:
-                        loader = UiHelper.start_loader("Connecting to HTAG Suburb Intelligence Agent...", self.session.theme)
+                        loader = UiHelper.start_loader(
+                            f"Fetching market data for {api_suburb}",
+                            ["Connecting to HTAG", "Analysing suburb market data", "Preparing preview"],
+                        )
                         try:
-                            htag_result = self.htag_service.fetch_suburb_analysis(
+                            loader.stage(1, "HTAG's research agent is analysing prices, growth, rents and demand -- this usually takes about a minute.",
+                                         start=5, end=92, expected_seconds=70)
+                            htag_result, stand_in = self.htag_service.fetch_suburb_analysis_or_nearby(
                                 suburb=api_suburb,
                                 state=api_state,
                                 postcode=api_postcode,
                                 property_type=api_prop_type
                             )
+                            if stand_in:
+                                st.info(
+                                    f"ℹ️ HTAG has no market data for **{api_suburb}** (common for small or rural "
+                                    f"localities). Showing nearby **{stand_in['suburb']} ({stand_in['postcode']})** "
+                                    "instead -- the report will say these figures are for that suburb."
+                                )
+                            loader.stage(2, "Preparing the data preview...", start=92, end=100, expected_seconds=2)
                             self.session.htag_data = htag_result
+                            st.session_state["htag_query"] = current_query
                             # Process and pretty-print 41 matched & extra variables to terminal
                             build_standardized_property_payload(
                                 suburb=api_suburb,
@@ -130,14 +156,22 @@ class DataSelectionComponent:
                                 property_type=api_prop_type,
                                 raw_api_data=htag_result
                             )
-                            st.success(f"✅ Successfully retrieved HTAG analysis for {api_suburb}!")
+                            st.success(f"✅ Retrieved HTAG analysis for {stand_in['suburb'] if stand_in else api_suburb}.")
+                        except HtagNoMarketData:
+                            st.info(
+                                f"ℹ️ HTAG has no {api_prop_type.lower()} market data for **{api_suburb}** or the nearby "
+                                "suburbs checked (common for small or rural localities). You can still generate the "
+                                "report: it will use real ABS Census and OpenStreetMap data, with market figures "
+                                "estimated and labelled as estimates."
+                            )
                         except Exception as e:
                             st.error(f"❌ Failed to fetch from HTAG API: {e}")
                         finally:
                             UiHelper.stop_loader(loader)
 
-                # Show preview of HTAG data if loaded
-                if self.session.htag_data:
+                # Preview only if the loaded HTAG data is for the location and
+                # property type currently selected in Step 1.
+                if self.session.htag_data and st.session_state.get("htag_query") == current_query:
                     hdata = self.session.htag_data
                     metrics = hdata.get("metrics", {})
                     rcs = hdata.get("rcs", {})
@@ -168,13 +202,35 @@ class DataSelectionComponent:
                         else:
                             st.json(hdata)
 
-        # Custom AI System Prompt
+        # Operator instructions for the AI: pick any ready-made focus areas
+        # (click to add, click again to remove) and/or write your own.
         with st.container(border=True):
             st.markdown("<h4>2. Pre-Sales Operator Instructions (Prompt)</h4>", unsafe_allow_html=True)
-            custom_prompt = st.text_area(
-                "Define what aspects you want the AI to emphasize in the report analysis",
-                value="Focus heavily on capital growth trends, school catchment boundaries, and transport proximity recommendations based on the customer requirements and listing data.",
-                height=100
+            st.markdown(f"<p style='font-size:0.85rem; color:{text_muted}; margin-bottom:6px;'>Click to add an instruction, click again to remove it:</p>", unsafe_allow_html=True)
+            selected_suggestions = st.pills(
+                "Suggested instructions",
+                options=PROMPT_SUGGESTIONS,
+                selection_mode="multi",
+                default=[PROMPT_SUGGESTIONS[0]],
+                label_visibility="collapsed",
+                key="prompt_suggestions",
+            ) or []
+            extra_prompt = st.text_area(
+                "Anything else the AI should emphasise? (optional)",
+                placeholder="e.g. The customer works in Parramatta and wants a short commute; they have two primary-school-age kids.",
+                height=90,
+                key="prompt_custom",
             )
 
-        return custom_prompt
+        nav_back, nav_next, nav_spacer = st.columns([1, 1.6, 3.4])
+        with nav_back:
+            st.button("← Back", use_container_width=True, key="back_to_prefs_btn",
+                      on_click=SessionState.go_to_tab, args=(0,))
+        with nav_next:
+            st.button("Next: Generate Report →", type="primary", use_container_width=True,
+                      key="next_to_generate_btn", on_click=SessionState.go_to_tab, args=(2,))
+
+        lines = [f"- {s}" for s in selected_suggestions]
+        if extra_prompt.strip():
+            lines.append(f"- {extra_prompt.strip()}")
+        return "\n".join(lines) if lines else "No specific operator instructions -- give a balanced overview."

@@ -8,3 +8,4 @@ playwright
 jinja2
 pypdf
 json_repair
+gspread
