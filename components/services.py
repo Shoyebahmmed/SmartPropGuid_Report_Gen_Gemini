@@ -50,11 +50,22 @@ class DataService:
             except ValueError:
                 pass
         if budget_str and budget_str in BUDGET_RANGES and 'Purchase price' in df_filtered.columns:
+            # An uploaded sheet's price column is often text ("$500,000", a
+            # stray "N/A", a blank cell) rather than a clean number -- a raw
+            # >=/<= comparison against that raises an uncaught TypeError that
+            # aborts the whole report. Coerce to numeric first; anything
+            # that still can't be parsed becomes NaN and is excluded by the
+            # comparison (never raises), the same as if it were missing.
+            prices = pd.to_numeric(
+                df_filtered['Purchase price'].astype(str).str.replace(r'[^\d.]', '', regex=True),
+                errors='coerce'
+            )
             low, high = BUDGET_RANGES[budget_str]
             if low is not None:
-                df_filtered = df_filtered[df_filtered['Purchase price'] >= low]
+                df_filtered = df_filtered[prices >= low]
+                prices = prices[prices >= low]
             if high is not None:
-                df_filtered = df_filtered[df_filtered['Purchase price'] <= high]
+                df_filtered = df_filtered[prices <= high]
         if property_type_str and 'Primary purpose' in df_filtered.columns:
             if property_type_str == "Land":
                 df_filtered = df_filtered[df_filtered['Primary purpose'] == 'Vacant land']

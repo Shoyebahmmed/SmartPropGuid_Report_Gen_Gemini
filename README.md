@@ -39,7 +39,7 @@ The project has been refactored into a modular Object-Oriented design:
 SmartPropGuid_Report_Gen_Gemini/
 ├── app.py                      # Main entrypoint & coordinator
 ├── sample_template.html        # Default report template
-├── Cred.env                    # API Keys & Model Configuration
+├── Cred.env.example            # Template for your own Cred.env (git-ignored, never commit the real one)
 ├── requirements.txt            # Package dependencies
 └── components/                 # Application components and services package
     ├── __init__.py             # Package initializer
@@ -101,35 +101,53 @@ This roadmap outlines the past milestones, current active sprints, and upcoming 
 ## 🚀 Execution & Setup
 
 ### Prerequisites
-Ensure your local environment is running Python 3.9+ and contains an active Anthropic API credential key.
+Python 3.11+ and an active Anthropic API key (HTAG and Google Sheets keys are optional -- see below).
+
+> ⚠️ **About the `.venv` folder you get from `git clone`**: this repo tracks a `.venv` in git, but it was built on one specific machine's OS/Python version and will **not** work on a different machine (compiled packages like `cryptography` and `grpcio` are platform-specific). Don't activate it. Create your own virtual environment under a different name, per step 2 below, and leave the tracked one alone.
 
 ### Installation
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/your-repo-name.git
-   cd your-repo-name
+   git clone https://github.com/Shoyebahmmed/SmartPropGuid_Report_Gen_Gemini.git
+   cd SmartPropGuid_Report_Gen_Gemini
    ```
-2. Create and activate a virtual environment:
+2. Create and activate your OWN virtual environment (named `.venv-local` here specifically so it can't collide with the tracked `.venv` folder from step 1):
    ```bash
-   python -m venv .venv
-   # On Windows:
-   .venv\Scripts\activate
+   python -m venv .venv-local
+   # On Windows (PowerShell):
+   .venv-local\Scripts\Activate.ps1
    # On Linux/macOS:
-   source .venv/bin/activate
+   source .venv-local/bin/activate
    ```
 3. Install dependencies:
    ```bash
    pip install -r requirements.txt
    ```
-4. Set up credentials:
-   Create a `Cred.env` file in the root directory and add your Anthropic API key:
-   ```env
-   ANTHROPIC_API_KEY=your_anthropic_api_key_here
-   ```
-5. Run the application:
+4. Install the browser PDF generation needs (one-time; `pip install` alone does not fetch this):
    ```bash
-   streamlit run app.py
+   playwright install chromium
    ```
+5. Set up credentials:
+   Copy the template and fill in your own keys -- never someone else's copy of this file, and never commit it:
+   ```bash
+   cp Cred.env.example Cred.env     # macOS/Linux
+   copy Cred.env.example Cred.env   # Windows
+   ```
+   Then edit `Cred.env` and fill in at least `ANTHROPIC_API_KEY`. See `Cred.env.example` for every variable the app reads (HTAG, Google Sheets, model override) and what each does.
+6. Run the application. Use `python -m streamlit`, not a bare `streamlit` command -- on some setups the `streamlit` executable's folder isn't on your PATH even though Python is, which fails with "command not found" despite everything being installed correctly:
+   ```bash
+   python -m streamlit run app.py
+   ```
+7. Verify the install before relying on it: fill in the Customer Preferences tab with a real Australian suburb and generate one full report. Confirm it completes, the PDF downloads, and (Tab 2) "Real-data grounding" shows green/ON -- if HTAG is configured correctly, Tab 3's data source will say so too.
+
+### Working with this shared repo
+
+A few rules that cost nothing and prevent real headaches on a repo several people push to:
+
+- **Pull before you start work each session**: `git pull origin main`. The app and its data connections have changed under people's feet before (twice, in the same week) from someone starting on a stale copy.
+- **Never commit `Cred.env`, `google_service_account*.json`, or any real key.** They're git-ignored already -- that only works if you don't force-add them.
+- **Work on your own branch** for anything beyond a one-line fix: `git checkout -b yourname/short-description`, then open a Pull Request instead of pushing straight to `main`. This gives someone a chance to catch a problem before it reaches everyone else's copy.
+- **Never force-push, never run `git reset --hard` / `git clean -fd` on `main`**, and never delete a branch you didn't create. If git has you stuck, ask rather than reaching for a destructive command.
 
 ---
 
